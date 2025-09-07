@@ -1,0 +1,27 @@
+# ROS 2 build artifacts
+build/
+install/
+log/
+
+# Python compiled files
+*.pyc
+__pycache__/
+
+# Editor config
+.vscode/
+.idea/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Environment files
+.env
+.envrc
+
+# Swap files
+*.swp
+
+# ROS 2 overlays and temp files
+*.py~
+*.orig
