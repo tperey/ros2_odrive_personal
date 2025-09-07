@@ -8,7 +8,7 @@ class PS5ControllerNode(Node):
     def __init__(self):
 
         # General init
-        super().__init__('ps5_node')
+        super().__init__('ps5_controller_node')
         self._joystick_y = 122.0 # Init to middle
         self._button_east = False # Init to false (not pressed)
 
@@ -62,7 +62,7 @@ def main():
     try:
         rclpy.spin(node)  # Keep node alive and handle callbacks
     except KeyboardInterrupt:
-        node.get_logger().info("Shutting down PS5 node...")
+        node.get_logger().info("Shutting down PS5 Controller node...")
     finally:
         node.destroy_node()
         rclpy.shutdown()
