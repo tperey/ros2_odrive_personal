@@ -10,6 +10,7 @@ class PS5ControllerNode(Node):
         # General init
         super().__init__('ps5_controller_node')
         self._joystick_y = 122.0 # Init to middle
+        self._prev_js = 122.0 
         self._button_east = False # Init to false (not pressed)
 
         # Publishers
@@ -43,7 +44,9 @@ class PS5ControllerNode(Node):
         btn_msg.data = cur_btn
         self.button_pub.publish(btn_msg)
 
-        self.get_logger().info(f"Published joystick: {js_msg.data}, button {btn_msg.data}")
+        if cur_js != self._prev_js:  # Clip to publish on change
+            self.get_logger().info(f"Published joystick: {js_msg.data}, button {btn_msg.data}")
+            self._prev_js = cur_js
 
     # SEPARATE THREAD TRACKING CONTROLLER
     def poll_controller(self):
