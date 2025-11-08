@@ -17,7 +17,7 @@ def generate_launch_description():
             # optional: topic remapping if needed
             # ('left_stick_y', '/joy/left_stick_y')
         ]
-    ),
+    )
     ctrlnode = Node(
         package='ps5_odrive_control',  # your package name
         executable='ps5_controller_node',  # your node entrypoint

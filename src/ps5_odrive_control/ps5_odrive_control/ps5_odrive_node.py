@@ -25,7 +25,9 @@ class PS5OdriveNode(Node):
         self._odrive_state = OdriveState.VELO_MODE
 
         # Odrive
+        self.get_logger().info("!!!STARTING ODrive motors...")
         self._odrv = get_Odrive_init(Vmax = V_MAX, ConType = ControlMode.VELOCITY_CONTROL)
+        self.get_logger().info("Odrive prepped :)")
         request_state(self._odrv.axis0, AxisState.CLOSED_LOOP_CONTROL)
 
         # Subscribers

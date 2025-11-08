@@ -4,6 +4,8 @@ from rclpy.node import Node
 from std_msgs.msg import Bool, Float32
 from inputs import get_gamepad
 
+LOG_THRESH = 3
+
 class PS5ControllerNode(Node):
     def __init__(self):
 
@@ -44,7 +46,7 @@ class PS5ControllerNode(Node):
         btn_msg.data = cur_btn
         self.button_pub.publish(btn_msg)
 
-        if cur_js != self._prev_js:  # Clip to publish on change
+        if abs(cur_js - self._prev_js) > LOG_THRESH:  # Clip to publish on change
             self.get_logger().info(f"Published joystick: {js_msg.data}, button {btn_msg.data}")
             self._prev_js = cur_js
 
