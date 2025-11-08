@@ -10,6 +10,8 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+         # Install launch files
+        ('share/' + package_name + '/launch', ['launch/ps5_odrive_launch.py']),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -22,6 +24,7 @@ setup(
         'console_scripts': [
             'test_node = ps5_odrive_control.test_node:main',
             'ps5_controller_node = ps5_odrive_control.ps5_controller_node:main',
+            'ps5_odrive_node = ps5_odrive_control.ps5_odrive_node:main',
         ],
     },
 )
