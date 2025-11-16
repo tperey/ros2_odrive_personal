@@ -248,10 +248,10 @@ if __name__=="__main__":
     J1yy = (1/12.0)*m1*(L1**2) # !!! ASSUMES this still good enough
     J1zz = J1yy
     
-    m2 = 0.2#0.048 # [kg]
+    m2 = 0.048 # [kg]
     b2 = 0.0198*m2 # [N-m/(rad/s)]. Measured and calc'd with ChatGPT
     L2 = 0.1425 # [m]
-    l2 = L2 #L2/2
+    l2 = L2/2
     J2xx = 0.0
     J2yy = (1/12.0)*m2*(L2**2)
     print(J2yy)
@@ -262,7 +262,7 @@ if __name__=="__main__":
     t2d0 = random.uniform(-0.05, 0.05)
     Q = np.eye(4)
     R = np.array([[10.0]]) # Punish effort, its too high
-    # print("Prepping LQR")
-    # simulateFurata.prep_LQR(Q,R)
+    print("Prepping LQR")
+    simulateFurata.prep_LQR(Q,R)
     simulateFurata.simulate(np.array([0.0, (np.pi + t20), t2d0, 0.0]), reset_time=1.0)
             
