@@ -9,9 +9,9 @@ def generate_launch_description():
         name='ps5_odrive_node',        # optional ROS node name
         output='screen',               # print logs to screen
         parameters=[{
-            # optional: any ROS 2 parameters you want to pass
-            # 'V_MAX': 10.0,
-            # 'some_other_param': 5
+            'doCal': False,
+            'doErase': False,
+            'doRecon': False
         }],
         remappings=[
             # optional: topic remapping if needed
