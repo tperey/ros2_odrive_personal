@@ -1,0 +1,2 @@
+float32 degrees
+float32 velocity

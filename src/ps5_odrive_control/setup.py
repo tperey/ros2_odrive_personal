@@ -25,6 +25,7 @@ setup(
             'test_node = ps5_odrive_control.test_node:main',
             'ps5_controller_node = ps5_odrive_control.ps5_controller_node:main',
             'ps5_odrive_node = ps5_odrive_control.ps5_odrive_node:main',
+            'encoder_node = ps5_odrive_control.encoder_node:main'
         ],
     },
 )
