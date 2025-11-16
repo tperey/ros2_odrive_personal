@@ -248,10 +248,10 @@ if __name__=="__main__":
     J1yy = (1/12.0)*m1*(L1**2) # !!! ASSUMES this still good enough
     J1zz = J1yy
     
-    m2 = 0.048 # [kg]
+    m2 = 0.2#0.048 # [kg]
     b2 = 0.0198*m2 # [N-m/(rad/s)]. Measured and calc'd with ChatGPT
     L2 = 0.1425 # [m]
-    l2 = L2/2
+    l2 = L2 #L2/2
     J2xx = 0.0
     J2yy = (1/12.0)*m2*(L2**2)
     print(J2yy)
