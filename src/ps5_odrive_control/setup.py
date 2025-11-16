@@ -12,6 +12,8 @@ setup(
         ('share/' + package_name, ['package.xml']),
          # Install launch files
         ('share/' + package_name + '/launch', ['launch/ps5_odrive_launch.py']),
+        ('share/' + package_name + '/launch', ['launch/encoder_record_launch.py']),
+        ('share/' + package_name + '/launch', ['launch/furata_launch.py']),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -25,7 +27,8 @@ setup(
             'test_node = ps5_odrive_control.test_node:main',
             'ps5_controller_node = ps5_odrive_control.ps5_controller_node:main',
             'ps5_odrive_node = ps5_odrive_control.ps5_odrive_node:main',
-            'encoder_node = ps5_odrive_control.encoder_node:main'
+            'encoder_node = ps5_odrive_control.encoder_node:main',
+            'furata_controller = ps5_odrive_control.furata_controller:main'
         ],
     },
 )

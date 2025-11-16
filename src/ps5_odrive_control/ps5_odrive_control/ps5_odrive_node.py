@@ -11,6 +11,8 @@ from odrive.enums import * # Get them all
 from ps5_odrive_control.common.playing_with_odrive import get_Odrive_init
 from odrive.utils import request_state
 
+import argparse
+
 class OdriveState(Enum):
     VELO_MODE = 0
     POS_MODE = 1
@@ -24,9 +26,18 @@ class PS5OdriveNode(Node):
         super().__init__('ps5_odrive_node')
         self._odrive_state = OdriveState.VELO_MODE
 
+        # Params
+        self.declare_parameter('doCal', False)
+        self.declare_parameter('doErase', False)
+        self.declare_parameter('doRecon', False)
+        self._doCal = self.get_parameter('doCal').get_parameter_value().bool_value
+        self._doErase = self.get_parameter('doErase').get_parameter_value().bool_value
+        self._doRecon = self.get_parameter('doRecon').get_parameter_value().bool_value
+
         # Odrive
         self.get_logger().info("!!!STARTING ODrive motors...")
-        self._odrv = get_Odrive_init(Vmax = V_MAX, ConType = ControlMode.VELOCITY_CONTROL)
+        self._odrv = get_Odrive_init(Vmax = V_MAX, ConType = ControlMode.VELOCITY_CONTROL,
+                                     shouldCalibrate = self._doCal, shouldErase = self._doErase, shouldReconfig = self._doRecon)
         self.get_logger().info("Odrive prepped :)")
         request_state(self._odrv.axis0, AxisState.CLOSED_LOOP_CONTROL)
 
@@ -54,6 +65,7 @@ class PS5OdriveNode(Node):
 
         time.sleep(1.0)
 
+# ---- MAIN -----
 def main():
     rclpy.init()
     node = PS5OdriveNode()

@@ -52,7 +52,7 @@ def get_Odrive_init(Kp = 20.0, Kv = 0.167, KvI = 0.333, Vmax =4.0, shouldErase =
         # Power
         odrv.config.dc_bus_overvoltage_trip_level = 50
         odrv.config.dc_bus_undervoltage_trip_level = 10.5
-        odrv.config.dc_max_positive_current = 14
+        odrv.config.dc_max_positive_current = 11.5
         odrv.config.dc_max_negative_current = -5
         odrv.config.brake_resistor0.enable = False
 

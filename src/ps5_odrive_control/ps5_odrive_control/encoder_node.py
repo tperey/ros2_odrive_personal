@@ -48,7 +48,7 @@ class EncoderNode(Node):
         self.timer = self.create_timer(self._dt, self.timer_callback)  # 100 Hz polling, much slower than Arduino, just takes newest message
 
         # Velocity estimations
-        self._vel_filter = SimpleLowFilter(self._dt, cutoff = 10.0)  # Cutoff in [Hz]
+        self._vel_filter = SimpleLowFilter(self._dt, cutoff = 4.0)  # Cutoff in [Hz]
 
     def timer_callback(self):
         try:
@@ -82,7 +82,7 @@ def main(args=None):
     node = EncoderNode(
         port='/dev/ttyACM0',   # change to your Arduino port
         baud=115200,
-        topic='encoder_degrees'
+        topic='encoder_furata'
     )
     try:
         rclpy.spin(node)
