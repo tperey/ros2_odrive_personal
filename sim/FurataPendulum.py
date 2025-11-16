@@ -133,7 +133,7 @@ class FurataPendulum:
         if self._lqr_K is not None:
             q_equ = np.array([0.0, np.pi, 0.0, 0.0])
             tau = ((-self._lqr_K) @ (self._q - q_equ))[0]
-            print(tau)
+            #print(tau)
         else: # Default to 0
             tau = 0.0
 
@@ -200,8 +200,8 @@ class FurataPendulum:
         J2zz = self._J2[2]
 
         # Simplifications
-        J1 = J1yy
-        J2 = J2yy
+        J1 = J1zz
+        J2 = J2zz
         J1hat = J1 + m1*(l1**2)
         J2hat = J2 + m2*(l2**2)
         J0hat = J1 + m1*(l1**2) + m2*(L1**2)
@@ -240,7 +240,8 @@ if __name__=="__main__":
     encMass = 0.130 # [kg]. Mass of encoder per Amazon
 
     m1 = 0.19 + encMass # [kg]
-    b1 = 1.0*m1 # [N-m/(rad/s)]
+    #b1 = 1.0*m1 # [N-m/(rad/s)]
+    b1 = 0.0 #0.01
     L1 = 0.140 # [m]
     l1 = 0.8*L1  # !!! ASSUMES how COM is shifted
     J1xx = 0.0
@@ -253,6 +254,7 @@ if __name__=="__main__":
     l2 = L2/2
     J2xx = 0.0
     J2yy = (1/12.0)*m2*(L2**2)
+    print(J2yy)
     J2zz = J2yy
     simulateFurata = FurataPendulum(dt, m1, l1, L1, J1xx, J1yy, J1zz, m2, l2, L2, J2xx, J2yy, J2zz, b1, b2)
     
@@ -260,7 +262,7 @@ if __name__=="__main__":
     t2d0 = random.uniform(-0.05, 0.05)
     Q = np.eye(4)
     R = np.array([[10.0]]) # Punish effort, its too high
-    print("Prepping LQR")
-    simulateFurata.prep_LQR(Q,R)
+    # print("Prepping LQR")
+    # simulateFurata.prep_LQR(Q,R)
     simulateFurata.simulate(np.array([0.0, (np.pi + t20), t2d0, 0.0]), reset_time=1.0)
             
