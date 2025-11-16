@@ -32,7 +32,7 @@ void setup() {
 void loop() {
   // put your main code here, to run repeatedly:
   if (sendDeg) {
-    current_deg = current_pulses*DEG_PER_PULSE;
+    current_deg = current_pulses*RAD_PER_PULSE;
     Serial.println(current_deg);
 
     sendDeg = false;

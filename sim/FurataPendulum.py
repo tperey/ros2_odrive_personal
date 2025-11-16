@@ -133,7 +133,7 @@ class FurataPendulum:
         if self._lqr_K is not None:
             q_equ = np.array([0.0, np.pi, 0.0, 0.0])
             tau = ((-self._lqr_K) @ (self._q - q_equ))[0]
-            #print(tau)
+            print(tau)
         else: # Default to 0
             tau = 0.0
 
@@ -151,8 +151,8 @@ class FurataPendulum:
                 # choose new random initial conditions:
                 th1 = np.random.uniform(-0.5, 0.5)
                 th2 = np.random.uniform(np.pi - 0.5, np.pi + 0.5)
-                th1d = np.random.uniform(-0.25, 0.25)
-                th2d = np.random.uniform(-0.25, 0.25)
+                th1d = np.random.uniform(-0.5, 0.5)
+                th2d = np.random.uniform(-0.5, 0.5)
 
                 self._q = np.array([th1, th2, th1d, th2d])
                 self._fwd_kin()   # recompute positions
@@ -234,20 +234,23 @@ class FurataPendulum:
 
 
 if __name__=="__main__":
-
     # Init
-    dt = 0.01 # [s]
-    b1 = 1.0
-    m1 = 5.0 # [kg]
-    l1 = 1.0 # [m]
-    L1 = 1.0 # [m]
+    dt = 0.001 # [s]
+
+    encMass = 0.130 # [kg]. Mass of encoder per Amazon
+
+    m1 = 0.19 + encMass # [kg]
+    b1 = 1.0*m1 # [N-m/(rad/s)]
+    L1 = 0.140 # [m]
+    l1 = 0.8*L1  # !!! ASSUMES how COM is shifted
     J1xx = 0.0
-    J1yy = (1/12.0)*m1*(L1**2)
+    J1yy = (1/12.0)*m1*(L1**2) # !!! ASSUMES this still good enough
     J1zz = J1yy
-    b2 = 0.5
-    m2 = 1.0 # [kg]
-    l2 = 1.0 # [m]
-    L2 = 1.0 # [m]
+    
+    m2 = 0.048 # [kg]
+    b2 = 0.0198*m2 # [N-m/(rad/s)]. Measured and calc'd with ChatGPT
+    L2 = 0.1425 # [m]
+    l2 = L2/2
     J2xx = 0.0
     J2yy = (1/12.0)*m2*(L2**2)
     J2zz = J2yy
@@ -256,8 +259,8 @@ if __name__=="__main__":
     t20 = random.uniform(-0.1, 0.1)
     t2d0 = random.uniform(-0.05, 0.05)
     Q = np.eye(4)
-    R = np.array([[1.0]])
+    R = np.array([[10.0]]) # Punish effort, its too high
     print("Prepping LQR")
     simulateFurata.prep_LQR(Q,R)
-    simulateFurata.simulate(np.array([0.0, (np.pi + t20), t2d0, 0.0]), reset_time=5.0)
+    simulateFurata.simulate(np.array([0.0, (np.pi + t20), t2d0, 0.0]), reset_time=1.0)
             
