@@ -7,13 +7,19 @@ import serial
 
 class SimpleLowFilter():
     def __init__(self, dt, cutoff):
+        self._dt = dt
         self._alpha = np.exp(-2*np.pi*dt*cutoff)
-        self._prev_val = 0.0
+
+        self._prev_pos = 0.0
+        self._prev_velo = 0.0
     
-    def update(self, cur_val):
-        new_val = self._alpha*self._prev_val + (1.0 - self._alpha)*cur_val
-        self._prev_val = new_val
-        return new_val
+    def update(self, pos):
+        # Passed in a pos, compute velo
+        cur_velo = (pos - self._prev_pos)/self._dt
+        new_velo = self._alpha*self._prev_velo + (1.0 - self._alpha)*cur_velo
+        self._prev_pos = pos  # Update previous
+        self._prev_velo = new_velo
+        return new_velo
 
 class EncoderNode(Node):
     def __init__(self,
@@ -47,7 +53,7 @@ class EncoderNode(Node):
     def timer_callback(self):
         try:
             # Read all available lines
-            while self.ser.in_waiting:(val - self._deg_prev)/self._dt
+            while self.ser.in_waiting:
                 try:
                     line = self.ser.readline().decode('utf-8').strip()
                     if line:
@@ -61,9 +67,7 @@ class EncoderNode(Node):
                             msg = Float32MultiArray()
                             msg.data = [val, velo]  # Zero velocity for now
                             self.pub.publish(msg)
-                            #self.get_logger().info(f"Encoder deg: {val}")
-
-                            self._deg_prev = val  # Reset prev only if successful
+                            #self.get_logger().info(f"_ deg: {val}")
                         except ValueError:
                             # Ignore malformed lines
                             self.get_logger().info("~~~Mishapen msg")
