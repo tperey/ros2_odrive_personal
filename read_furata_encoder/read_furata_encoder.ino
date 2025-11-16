@@ -5,9 +5,10 @@
 // 1 ms period, or 1 kHz tranmission
 #define BAUD_RATE 115200
 
-#define DEG_PER_PULSE 360.0/2400;  // Website says 600 P.R?
+#define DEG_PER_PULSE 360.0/2400 // Website says 600 P.R?
+#define RAD_PER_PULSE (2.0 * 3.1415926535)/2400
 // But maybe theres a gear ratio b/c empirically it was 2400
-// Also this is (360 deg/1 rev) * (1 rev / 2400 pulse)
+// Also this is (360 deg or 2pi rad/1 rev) * (1 rev / 2400 pulse)
 int enc1Pin = 2;
 int enc2Pin = 3;
 long current_pulses;
