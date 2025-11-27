@@ -29,6 +29,12 @@ class FurataPendulum:
 
         # I WANT STATE AND POSITIONS TO BE MEMBER VARS
         self._q = np.array([0.0, 0.0, 0.0, 0.0])  # Default to 0 ICs
+
+        # q[0] = t1 = motor position
+        # q[1] = t2 = pendulum angle
+        # q[2] = t1d = motor velocity
+        # q[3] = t2d = pendulum velocity
+
         self._fwd_kin() # Initialize link positions
 
         """ Animation Init """
@@ -264,5 +270,5 @@ if __name__=="__main__":
     R = np.array([[10.0]]) # Punish effort, its too high
     print("Prepping LQR")
     simulateFurata.prep_LQR(Q,R)
-    simulateFurata.simulate(np.array([0.0, (np.pi + t20), t2d0, 0.0]), reset_time=1.0)
+    simulateFurata.simulate(np.array([0.0, (np.pi + t20), 0.0, t2d0]), reset_time=1.0)
             

@@ -117,12 +117,12 @@ class EncoderNode(Node):
 
                 #self.get_logger().info(f"cur_dt = {cur_dt}")
                 velo = self._vel_filter.update(val_rad, new_dt = cur_dt)
-                assum_vel = self._assumed_filter.update(val_rad, 0.001)  # Lets also see constant dt velo
+                #assum_vel = self._assumed_filter.update(val_rad, 0.001)  # Lets also see constant dt velo
                 self._last_t = now
 
                 # Msg
                 msg = Float32MultiArray()
-                msg.data = [val_rad, velo, assum_vel]  # Zero velocity for now
+                msg.data = [val_rad, velo]#, assum_vel]  # Zero velocity for now
                 self.pub.publish(msg)
                 #self.get_logger().info(f"_ deg: {val}")
 
