@@ -4,6 +4,7 @@ import numpy as np
 from rclpy.node import Node
 from std_msgs.msg import Float32MultiArray
 import serial
+from time import perf_counter
 
 RAD_PER_PULSE = (2.0 * 3.1415926535)/2400
 
@@ -15,7 +16,12 @@ class SimpleLowFilter():
         self._prev_pos = 0.0
         self._prev_velo = 0.0
     
-    def update(self, pos):
+    def update(self, pos, new_dt = 0.0):
+
+        # Allow dynamic dt
+        if new_dt > 0.0:
+            self._dt = new_dt
+
         # Passed in a pos, compute velo
         cur_velo = (pos - self._prev_pos)/self._dt
         new_velo = self._alpha*self._prev_velo + (1.0 - self._alpha)*cur_velo
@@ -53,15 +59,17 @@ class EncoderNode(Node):
 
         # Velocity estimations
         self._vel_filter = SimpleLowFilter(self._dt, cutoff = 4.0)  # Cutoff in [Hz]
+        self._assumed_filter = SimpleLowFilter(self._dt, cutoff = 4.0)  # Cutoff in [Hz]
+        self._last_t = None  # Fallback to initial dt
 
     def timer_callback(self):
         try:
-
             # Read bytes
             if self.ser.in_waiting:  # Bring in available byte
                 self._buf += self.ser.read(self.ser.in_waiting)
             
             # Process new msg
+            val_rad_for_velo = None
             while len(self._buf) >= 7:  # If at least 7 bytes, then new msg has arrived
 
                 # Find start
@@ -95,17 +103,28 @@ class EncoderNode(Node):
                 # self.get_logger().info(f"Raw bytes: {list(self._buf[0:6])}")
                 # self.get_logger().info(f"val_rad = {val_rad}")
 
+                # Process ALL position, but only give one velo estimate per loop
+                self._buf = self._buf[7:]  # Remove packet we just processed
+                val_rad_for_velo = val_rad
+            
+            if val_rad_for_velo is not None:
                 # Update velocity
-                velo = self._vel_filter.update(val_rad)
+                now = perf_counter()
+                if self._last_t is None:
+                    cur_dt = 0.001  # Default
+                else:
+                    cur_dt = now - self._last_t
+
+                #self.get_logger().info(f"cur_dt = {cur_dt}")
+                velo = self._vel_filter.update(val_rad, new_dt = cur_dt)
+                assum_vel = self._assumed_filter.update(val_rad, 0.001)  # Lets also see constant dt velo
+                self._last_t = now
 
                 # Msg
                 msg = Float32MultiArray()
-                msg.data = [val_rad, velo]  # Zero velocity for now
+                msg.data = [val_rad, velo, assum_vel]  # Zero velocity for now
                 self.pub.publish(msg)
                 #self.get_logger().info(f"_ deg: {val}")
-
-                # Remove processed packet
-                self._buf = self._buf[7:]
 
         except serial.SerialException as e:
             self.get_logger().error(f"Serial error: {e}")
