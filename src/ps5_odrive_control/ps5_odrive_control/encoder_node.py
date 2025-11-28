@@ -57,10 +57,10 @@ class EncoderNode(Node):
         self._dt = 0.001
         self.timer = self.create_timer(self._dt, self.timer_callback)  # 100 Hz polling, much slower than Arduino, just takes newest message
 
-        # Velocity estimations
-        self._vel_filter = SimpleLowFilter(self._dt, cutoff = 4.0)  # Cutoff in [Hz]
-        self._assumed_filter = SimpleLowFilter(self._dt, cutoff = 4.0)  # Cutoff in [Hz]
-        self._last_t = None  # Fallback to initial dt
+        # # Velocity estimations
+        # self._vel_filter = SimpleLowFilter(self._dt, cutoff = 4.0)  # Cutoff in [Hz]
+        # self._assumed_filter = SimpleLowFilter(self._dt, cutoff = 4.0)  # Cutoff in [Hz]
+        # self._last_t = None  # Fallback to initial dt
 
     def timer_callback(self):
         try:
@@ -69,8 +69,7 @@ class EncoderNode(Node):
                 self._buf += self.ser.read(self.ser.in_waiting)
             
             # Process new msg
-            val_rad_for_velo = None
-            while len(self._buf) >= 7:  # If at least 7 bytes, then new msg has arrived
+            while len(self._buf) >= 11:  # If at least 11 bytes, then new msg has arrived
 
                 # Find start
                 start_idx = self._buf.find(b'\xAA\x55')
@@ -88,10 +87,11 @@ class EncoderNode(Node):
                 
                 # Extract
                 payload = self._buf[2:6]
-                checksum = self._buf[6]
+                speedload = self._buf[6:10]
+                checksum = self._buf[10]
 
                 # Compute checksum
-                cs_calc = (0xAA + 0x55 + sum(payload)) & 0xFF
+                cs_calc = (0xAA + 0x55 + sum(payload) + sum(speedload)) & 0xFF
                 if cs_calc != checksum:
                     self.get_logger().warn("+++Checksum mismatch, discarding packet")
                     self._buf = self._buf[1:]  # discard first byte and retry
@@ -102,29 +102,31 @@ class EncoderNode(Node):
                 val_rad = float(val) * RAD_PER_PULSE  # [rad] conversion
                 # self.get_logger().info(f"Raw bytes: {list(self._buf[0:6])}")
                 # self.get_logger().info(f"val_rad = {val_rad}")
+                spd = int.from_bytes(speedload, byteorder='little', signed=True)
+                spd_rad = float(spd) * RAD_PER_PULSE  # [rad] conversion
 
                 # Process ALL position, but only give one velo estimate per loop
-                self._buf = self._buf[7:]  # Remove packet we just processed
+                self._buf = self._buf[11:]  # Remove packet we just processed
                 val_rad_for_velo = val_rad
-            
-            if val_rad_for_velo is not None:
-                # Update velocity
-                now = perf_counter()
-                if self._last_t is None:
-                    cur_dt = 0.001  # Default
-                else:
-                    cur_dt = now - self._last_t
-
-                #self.get_logger().info(f"cur_dt = {cur_dt}")
-                velo = self._vel_filter.update(val_rad, new_dt = cur_dt)
-                #assum_vel = self._assumed_filter.update(val_rad, 0.001)  # Lets also see constant dt velo
-                self._last_t = now
 
                 # Msg
                 msg = Float32MultiArray()
-                msg.data = [val_rad, velo]#, assum_vel]  # Zero velocity for now
+                msg.data = [val_rad, spd_rad] # velo, assum_vel]  # Zero velocity for now
                 self.pub.publish(msg)
                 #self.get_logger().info(f"_ deg: {val}")
+            
+            # if val_rad_for_velo is not None:
+            #     # Update velocity
+            #     now = perf_counter()
+            #     if self._last_t is None:
+            #         cur_dt = 0.001  # Default
+            #     else:
+            #         cur_dt = now - self._last_t
+
+            #     #self.get_logger().info(f"cur_dt = {cur_dt}")
+            #     velo = self._vel_filter.update(val_rad, new_dt = cur_dt)
+            #     #assum_vel = self._assumed_filter.update(val_rad, 0.001)  # Lets also see constant dt velo
+            #     self._last_t = now
 
         except serial.SerialException as e:
             self.get_logger().error(f"Serial error: {e}")
