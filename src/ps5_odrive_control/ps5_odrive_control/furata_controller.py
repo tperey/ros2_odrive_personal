@@ -16,15 +16,17 @@ import numpy as np
 from msgs_furata.msg import TelemetryFurata
 
 REV_TO_RAD = 2*np.pi  # Converts rev to radians
-SMALL_ANGLE = 0.3  # Radians about t2 = pi where controller actually kicks in
+SMALL_ANGLE = 0.5  # Radians about t2 = pi where controller actually kicks in
 TORQUE_CONSTANT = 0.083 # [N-m/A]
+
+SCALE_TORQUE = 0.15 
 
 class OControlState(Enum):
     # For preventing crazy motions when pendulum in weird states
     OFF = 0
     ON = 1
 
-V_MAX = 2.0
+V_MAX = 6.0
 
 class FurataController(Node):
     def __init__(self):
@@ -57,8 +59,10 @@ class FurataController(Node):
         # Controller
         #self._lqr_K = np.array([-0.31622777,  7.47867553, -0.40398849,  0.73223273])  # R = 10
         #self._lqr_K = np.array([0.31622777,  7.47867553, 0.40398849,  0.73223273])  # R = 10, manual sign correction
-        self._lqr_K = np.array([0.31622777,  7.47867553, 0.0,  0.73223273])  # R = 10, manual sign correction
+        #self._lqr_K = np.array([0.31622777,  7.47867553, 0.0,  0.73223273])  # R = 10, manual sign correction
         #self._lqr_K = np.array([-1.0, 21.93765365, -1.26986995,  2.20989628])  # R = 1
+        self._lqr_K = np.array([-0.07160001, 4.2962601, -0.11372813, 0.80764367])  # Disc, Q with pend punish
+        self.get_logger().info(f"K = {self._lqr_K}")
         self._q_equ = np.array([0.0, np.pi, 0.0, 0.0])
         self.q = np.array([0.0, np.pi, 0.0, 0.0])
 
@@ -152,7 +156,7 @@ class FurataController(Node):
             # Still in linear region, so run LQR controller
             if (t2 < (np.pi + SMALL_ANGLE)) and (t2 > (np.pi - SMALL_ANGLE)):
                 tau = ((-self._lqr_K) @ (q - self._q_equ))
-                tau = tau*0.5 # For some reason, WAYYYY too large
+                tau = tau*SCALE_TORQUE # For some reason, WAYYYY too large
                 self._tau_des = tau  # For telemetry
                 self.get_logger().info(f"Commanding torque = {-tau}")
                 self._odrv.axis0.controller.input_torque = -tau  # Sign at motor level is opposite
