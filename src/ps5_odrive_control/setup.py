@@ -28,7 +28,8 @@ setup(
             'ps5_controller_node = ps5_odrive_control.ps5_controller_node:main',
             'ps5_odrive_node = ps5_odrive_control.ps5_odrive_node:main',
             'encoder_node = ps5_odrive_control.encoder_node:main',
-            'furata_controller = ps5_odrive_control.furata_controller:main'
+            'furata_controller = ps5_odrive_control.furata_controller:main',
+            'odrive_profiler = ps5_odrive_control.odrive_profiler:main',
         ],
     },
 )
