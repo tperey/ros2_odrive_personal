@@ -15,12 +15,15 @@ class SimpleLowFilter():
 
         self._prev_pos = 0.0
         self._prev_velo = 0.0
+
+        self._cutoff = cutoff
     
     def update(self, pos, new_dt = 0.0):
 
         # Allow dynamic dt
         if new_dt > 0.0:
             self._dt = new_dt
+            self._alpha = np.exp(-2*np.pi*self._dt*self._cutoff)
 
         # Passed in a pos, compute velo
         cur_velo = (pos - self._prev_pos)/self._dt

@@ -15,12 +15,27 @@ import numpy as np
 
 from msgs_furata.msg import TelemetryFurata
 
+from ps5_odrive_control.encoder_node import SimpleLowFilter
+from time import perf_counter
+from collections import deque
+
 REV_TO_RAD = 2*np.pi  # Converts rev to radians
 SMALL_ANGLE = 0.5  # Radians about t2 = pi where controller actually kicks in
 TORQUE_CONSTANT = 0.083 # [N-m/A]
 
 SCALE_TORQUE = 0.15 
 V_MAX = 1.0
+
+WINDOW_TO_USE = 25
+
+class MovingAverage:
+    def __init__(self, window_size):
+        self.window_size = window_size
+        self.buffer = deque(maxlen=window_size)
+
+    def update(self, x):
+        self.buffer.append(x)
+        return np.mean(self.buffer)
 
 class ProfileState(Enum):
     # For preventing crazy motions when pendulum in weird states
@@ -32,7 +47,7 @@ class OdriveProfiler(Node):
     def __init__(self):
 
         # General init
-        super().__init__('furata_controller')
+        super().__init__('odrive_profiler')
 
         # Params
         self.declare_parameter('doCal', False)
@@ -52,9 +67,9 @@ class OdriveProfiler(Node):
 
         # Profile-specific
         self._odrv.axis0.controller.config.input_mode = InputMode.TRAP_TRAJ
-        self._odrv.axis0.controller.config.trap_traj_vel_limit = V_MAX/4.0 # Max cruise speed for TRAP_TRAJ
-        self._odrv.axis0.controller.config.trap_traj_accel_limit = 10.0*(V_MAX/4.0)
-        self._odrv.axis0.controller.config.trap_traj_decel_limit = 10.0*(V_MAX/4.0)
+        self._odrv.axis0.trap_traj.config.vel_limit = V_MAX/4.0 # Max cruise speed for TRAP_TRAJ
+        self._odrv.axis0.trap_traj.config.accel_limit = 10.0*(V_MAX/4.0)
+        self._odrv.axis0.trap_traj.config.decel_limit = 10.0*(V_MAX/4.0)
         self._counter = 0
         self._control_state = ProfileState.OFF
     
@@ -67,6 +82,9 @@ class OdriveProfiler(Node):
         self._tau_des = 0.0  # [N-m]
         self.tel_timer = self.create_timer(self._tel_t, self.telemetry_callback)
         self.tel_pub = self.create_publisher(TelemetryFurata, 'telemetry_furata', 10)
+
+        self._tau_filter = MovingAverage(window_size=WINDOW_TO_USE)
+        self._last_t = None  # Fallback to initial dt
     
     def telemetry_callback(self):
         # Publish servo telemetry
@@ -76,8 +94,17 @@ class OdriveProfiler(Node):
         current_cmd = self._odrv.axis0.motor.foc.Iq_setpoint
         current_act = self._odrv.axis0.motor.foc.Iq_measured
 
-        tau_cmd = self._tau_des
         tau_act = current_act*TORQUE_CONSTANT
+
+        # Filter torque
+        # now = perf_counter()
+        # if self._last_t is None:
+        #     cur_dt = self._dt  # Default
+        # else:
+        #     cur_dt = now - self._last_t
+        # self.get_logger().info(f"cur_dt = {cur_dt}")
+        tau_filtered = self._tau_filter.update(tau_act)
+        # self._last_t = now
 
         if self._odrv.axis0.current_state == AxisState.CLOSED_LOOP_CONTROL:
             enabled = 1.0
@@ -86,8 +113,8 @@ class OdriveProfiler(Node):
 
         # Msg
         outgoing = TelemetryFurata()
-        outgoing.name = ["enabled", "motor_pos", "motor_vel", "I_cmd", "I_actual", "torq_cmd", "torq_actual"]
-        outgoing.data = [enabled, t1, t1d, current_cmd, current_act, tau_cmd, tau_act]
+        outgoing.name = ["enabled", "motor_pos", "motor_vel", "I_cmd", "I_actual", "torq_actual", "torq_filt"]
+        outgoing.data = [enabled, t1, t1d, current_cmd, current_act, tau_act, tau_filtered]
         self.tel_pub.publish(outgoing)
 
     def control_callback(self):
@@ -101,15 +128,18 @@ class OdriveProfiler(Node):
                 self.get_logger().info("---Enabling motor")
             
             # TRANSITION
-            self._control_state = ProfileState.ON
+            self._control_state = ProfileState.START
             self._odrv.axis0.controller.input_pos = 0.25  # [rev]
         
         elif self._control_state == ProfileState.START:
 
             # Wait 4 seconds, then move
             self._counter += 1
+            # self.get_logger().error("In START")
+            # self.get_logger().info(f"{self._odrv.axis0.current_state}")
+            self._odrv.axis0.controller.input_pos = 0.25  # [rev]
 
-            if self._counter == 2000:  # 500 Hz, so 2000 counts for 4 s
+            if self._counter == 400:  # 500 Hz, so 2000 counts for 4 s
                  # TRANSITION
                 self._control_state = ProfileState.MAX
                 self._odrv.axis0.controller.input_pos = 0.75  # [rev]
@@ -118,11 +148,14 @@ class OdriveProfiler(Node):
         elif self._control_state == ProfileState.MAX:
 
             # Wait 4 seconds, then move
+            self._odrv.axis0.controller.input_pos = 0.75  # [rev]
             self._counter += 1
+            # self.get_logger().error("In MAX")
+            # self.get_logger().info(f"{self._odrv.axis0.current_state}")
 
-            if self._counter == 2000:  # 500 Hz, so 2000 counts for 4 s
+            if self._counter == 400:  # 500 Hz, so 2000 counts for 4 s
                  # TRANSITION
-                self._control_state = ProfileState.start
+                self._control_state = ProfileState.START
                 self._odrv.axis0.controller.input_pos = 0.25  # [rev]
                 self._counter = 0
                 
