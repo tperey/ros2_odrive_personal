@@ -55,7 +55,7 @@ class EncoderNode(Node):
 
         # Create a fast timer to poll serial port
         self._dt = 0.001
-        self.timer = self.create_timer(self._dt, self.timer_callback)  # 100 Hz polling, much slower than Arduino, just takes newest message
+        self.timer = self.create_timer(self._dt, self.timer_callback)  # 1 KHz polling, same as Arduino
 
         # # Velocity estimations
         # self._vel_filter = SimpleLowFilter(self._dt, cutoff = 4.0)  # Cutoff in [Hz]

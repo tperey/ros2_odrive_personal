@@ -37,7 +37,7 @@ def generate_launch_description():
         ]
     )
 
-    delayenc = TimerAction(period = 10.0, actions = [encoder])
+    delayctrl = TimerAction(period = 2.0, actions = [controller])
 
     """ Record """
     # Create a timestamp string
@@ -50,14 +50,14 @@ def generate_launch_description():
     topics = ["/encoder_furata"]  # Example topic
 
     # Build the command for ros2 bag record
-    record_cmd = ["ros2", "bag", "record", "-o", bag_folder] + topics
+    #record_cmd = ["ros2", "bag", "record", "-o", bag_folder] + topics
 
     return LaunchDescription([
-        controller,
-        delayenc,
-        ExecuteProcess(
-            cmd=record_cmd,
-            output="screen"
-        )
+        encoder,
+        delayctrl,
+        # ExecuteProcess(
+        #     cmd=record_cmd,
+        #     output="screen"
+        # )
     ])
 

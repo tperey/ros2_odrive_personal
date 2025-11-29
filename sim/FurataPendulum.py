@@ -139,7 +139,7 @@ class FurataPendulum:
         if self._lqr_K is not None:
             q_equ = np.array([0.0, np.pi, 0.0, 0.0])
             tau = ((-self._lqr_K) @ (self._q - q_equ))[0]
-            #print(tau)
+            print(tau)
         else: # Default to 0
             tau = 0.0
 
@@ -234,6 +234,7 @@ class FurataPendulum:
         B = np.array([[0.0], [0.0], [B31], [B41]])
 
         # Solve LQR
+        print(f"denom = {denom}")
         P = solve_continuous_are(A, B, Q, R)
         self._lqr_K = np.linalg.inv(R) @ B.T @ P
         print(self._lqr_K)
@@ -254,12 +255,12 @@ if __name__=="__main__":
     J1yy = (1/12.0)*m1*(L1**2) # !!! ASSUMES this still good enough
     J1zz = J1yy
     
-    m2 = 0.048 # [kg]
+    m2 = 0.115 # [kg]
     b2 = 0.0198*m2 # [N-m/(rad/s)]. Measured and calc'd with ChatGPT
-    L2 = 0.1425 # [m]
+    L2 = 0.1445 # [m]
     l2 = L2/2
-    J2xx = 0.0
-    J2yy = (1/12.0)*m2*(L2**2)
+    J2xx = 0.00003546 # 35.46 # [kg-m2]
+    J2yy = 0.000250 # [kg-m2] #(1/12.0)*m2*(L2**2)
     print(J2yy)
     J2zz = J2yy
     simulateFurata = FurataPendulum(dt, m1, l1, L1, J1xx, J1yy, J1zz, m2, l2, L2, J2xx, J2yy, J2zz, b1, b2)
@@ -267,7 +268,7 @@ if __name__=="__main__":
     t20 = random.uniform(-0.1, 0.1)
     t2d0 = random.uniform(-0.05, 0.05)
     Q = np.eye(4)
-    R = np.array([[10.0]]) # Punish effort, its too high
+    R = np.array([[1.0]]) # Punish effort, its too high
     print("Prepping LQR")
     simulateFurata.prep_LQR(Q,R)
     simulateFurata.simulate(np.array([0.0, (np.pi + t20), 0.0, t2d0]), reset_time=1.0)

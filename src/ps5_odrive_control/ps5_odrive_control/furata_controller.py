@@ -13,8 +13,11 @@ from odrive.utils import request_state
 
 import numpy as np
 
+from msgs_furata.msg import TelemetryFurata
+
 REV_TO_RAD = 2*np.pi  # Converts rev to radians
-SMALL_ANGLE = 0.6  # Radians about t2 = pi where controller actually kicks in
+SMALL_ANGLE = 0.3  # Radians about t2 = pi where controller actually kicks in
+TORQUE_CONSTANT = 0.083 # [N-m/A]
 
 class OControlState(Enum):
     # For preventing crazy motions when pendulum in weird states
@@ -39,7 +42,7 @@ class FurataController(Node):
 
         # Odrive
         self.get_logger().info("!!!STARTING ODrive motors...")
-        self._odrv = get_Odrive_init(Vmax = V_MAX, ConType = ControlMode.TORQUE_CONTROL,
+        self._odrv = get_Odrive_init(Vmax = V_MAX, Kv = 0.333, ConType = ControlMode.TORQUE_CONTROL,
                                      shouldCalibrate = self._doCal, shouldErase = self._doErase, shouldReconfig = self._doRecon)
         self.get_logger().info("Odrive prepped :)")
         self._odrv.clear_errors()  # Clear errors on start
@@ -52,26 +55,92 @@ class FurataController(Node):
         self.encoder_sub = self.create_subscription(Float32MultiArray, 'encoder_furata', self.encoder_callback, 10)
     
         # Controller
-        #self._lqr_K = np.array([-0.31622777, 9.16100057, -0.8506804, 0.84424739])  # Copied from simulator, with mega Link 1 damping
-        self._lqr_K = np.array([-0.31622777, 7.21298925, -0.40204377, 0.69358956])
+        #self._lqr_K = np.array([-0.31622777,  7.47867553, -0.40398849,  0.73223273])  # R = 10
+        #self._lqr_K = np.array([0.31622777,  7.47867553, 0.40398849,  0.73223273])  # R = 10, manual sign correction
+        self._lqr_K = np.array([0.31622777,  7.47867553, 0.0,  0.73223273])  # R = 10, manual sign correction
+        #self._lqr_K = np.array([-1.0, 21.93765365, -1.26986995,  2.20989628])  # R = 1
         self._q_equ = np.array([0.0, np.pi, 0.0, 0.0])
+        self.q = np.array([0.0, np.pi, 0.0, 0.0])
+
+        self._dt = 0.002 # [ms]. So 500 Hz
+        self.ctrl_timer = self.create_timer(self._dt, self.control_callback)
+
+        # Telemetry
+        self._tel_t = 0.005 # [ms]. So 200 Hz
+        self._tau_des = 0.0  # [N-m]
+        self.tel_timer = self.create_timer(self._tel_t, self.telemetry_callback)
+        self.tel_pub = self.create_publisher(TelemetryFurata, 'telemetry_furata', 10)
+        self.ctl_pub = self.create_publisher(Float32MultiArray, 'control_terms', 10)
 
     def encoder_callback(self, msg):
+        # Simply update stored state
+        t1 = -1*((self._odrv.axis0.pos_estimate)*REV_TO_RAD)  # Odrive space is NEGATIVE
+        t1d = -1*((self._odrv.axis0.vel_estimate)*REV_TO_RAD)
+        t2 = msg.data[0] % (2*np.pi)
+        t2d = msg.data[1] # Parse from encoder
+        
+        self.q = np.array([t1, t2, t1d, t2d])
+    
+    def telemetry_callback(self):
+        # Publish servo telemetry
+        t1 = -1*((self._odrv.axis0.pos_estimate)*REV_TO_RAD)
+        t1d = -1*((self._odrv.axis0.vel_estimate)*REV_TO_RAD)
+        t2 = self.q[1]
+        t2d = self.q[3]
+
+        current_cmd = self._odrv.axis0.motor.foc.Iq_setpoint
+        current_act = self._odrv.axis0.motor.foc.Iq_measured
+
+        tau_cmd = self._tau_des
+        tau_act = current_act*TORQUE_CONSTANT
+
+        if self._odrv.axis0.current_state == AxisState.CLOSED_LOOP_CONTROL:
+            enabled = 1.0
+        else:
+            enabled = 0.0
+
+        # Msg
+        outgoing = TelemetryFurata()
+        outgoing.name = ["enabled", "motor_pos", "pend_pos", "motor_vel", "pend_vel", "I_cmd", "I_actual", "torq_cmd", "torq_actual"]
+        outgoing.data = [enabled, t1, t2, t1d, t2d, current_cmd, current_act, tau_cmd, tau_act]
+        self.tel_pub.publish(outgoing)
+
+        # Check control terms
+        error = self.q - self._q_equ
+
+        gains = -self._lqr_K
+        if enabled:
+            c0 = gains[0]*error[0]
+            c1 = gains[1]*error[1]
+            c2 = gains[2]*error[2]
+            c3 = gains[3]*error[3]
+        else:
+            c0 = 0.0
+            c1 = 0.0
+            c2 = 0.0
+            c3 = 0.0
+
+        control_terms = Float32MultiArray()
+        control_terms.data = [c0, c1, c2, c3]
+        self.ctl_pub.publish(control_terms)
+
+    def control_callback(self):
+
+        # Get state vars from member var
+        q = self.q
+        t1 = self.q[0]
+        t1d = self.q[2]
+        t2 = self.q[1]
+        t2d = self.q[3] # Parse from encoder
 
         """ State machine for LQR encoder """
-        t1 = (self._odrv.axis0.pos_estimate)*REV_TO_RAD
-        t1d = (self._odrv.axis0.vel_estimate)*REV_TO_RAD
-        t2 = msg.data[0]
-        t2d = msg.data[1]  # Parse from encoder
-        
-        q = np.array([t1, t2, t1d, t2d])
-
         if self._control_state == OControlState.OFF:
 
             # Hit linear region, so re-engage
             if (t2 < (np.pi + SMALL_ANGLE)) and (t2 > (np.pi - SMALL_ANGLE)):
                 request_state(self._odrv.axis0, AxisState.CLOSED_LOOP_CONTROL)  # Enable O-drive
                 self._control_state = OControlState.ON
+                self._odrv.axis0.pos_estimate = 0.0  # 0 the position on start
                 self.get_logger().info("---Enabling motor")
             else:
                 # Stay in IDLE
@@ -83,10 +152,10 @@ class FurataController(Node):
             # Still in linear region, so run LQR controller
             if (t2 < (np.pi + SMALL_ANGLE)) and (t2 > (np.pi - SMALL_ANGLE)):
                 tau = ((-self._lqr_K) @ (q - self._q_equ))
-                tau = -tau*0.5 # For some reason, WAYYYY too large
-                # Also, I think sign at motor level is opposite
-                self.get_logger().info(f"Commanding torque = {tau}")
-                self._odrv.axis0.controller.input_torque = tau
+                tau = tau*0.5 # For some reason, WAYYYY too large
+                self._tau_des = tau  # For telemetry
+                self.get_logger().info(f"Commanding torque = {-tau}")
+                self._odrv.axis0.controller.input_torque = -tau  # Sign at motor level is opposite
             else:
                 # Stay in IDLE
                 self._odrv.axis0.controller.input_vel = 0.0
