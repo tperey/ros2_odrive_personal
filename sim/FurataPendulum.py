@@ -2,7 +2,8 @@ import numpy as np
 from scipy.integrate import solve_ivp
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
-from scipy.linalg import solve_continuous_are
+from scipy.linalg import solve_continuous_are, solve_discrete_are
+from scipy.signal import cont2discrete
 import random
 
 class FurataPendulum:
@@ -50,9 +51,21 @@ class FurataPendulum:
         self.link1, = self.ax.plot([], [], [], lw=3, c='b')
         self.link2, = self.ax.plot([], [], [], lw=3, c='r')
 
+        """ Animation states """
+        # Logging buffers
+        self._log_t = []
+        self._log_q = []
+        self._log_fig, self._log_ax = plt.subplots(4, 1, figsize=(6,8), sharex=True)
+        self._log_lines = []
+        for i in range(4):
+            line, = self._log_ax[i].plot([], [])
+            self._log_lines.append(line)
+            self._log_ax[i].set_ylabel(f"q[{i}]")
+        self._log_ax[-1].set_xlabel("time (s)")
+
         # Animation
         self.ani = FuncAnimation(self.fig, self.update_sim, interval=dt*1000, blit=True)
-    
+
     def _fwd_kin(self):
         """ Compute link positions geometrically given a state """
         t1 = self._q[0]
@@ -139,7 +152,10 @@ class FurataPendulum:
         if self._lqr_K is not None:
             q_equ = np.array([0.0, np.pi, 0.0, 0.0])
             tau = ((-self._lqr_K) @ (self._q - q_equ))[0]
-            print(tau)
+
+            # Troubleshooting error terms
+            # c1 = -self._lqr_K[0,0] * (self._q[0] - q_equ[0])
+            # print(f"q0, q_equ0, c1, overall_tau: {self._q[0]}, {q_equ[0]}, {c1}, {tau}")
         else: # Default to 0
             tau = 0.0
 
@@ -147,11 +163,32 @@ class FurataPendulum:
         self._step(tau=tau, method="RK4")
         self._fwd_kin()
 
+        # --- LOGGING ---
+        self._log_t.append(self._sim_time)
+        self._log_q.append(self._q.copy())
+
+        # Update state plots
+        t_arr = np.array(self._log_t)
+        q_arr = np.array(self._log_q)
+
+        for i in range(4):
+            self._log_lines[i].set_data(t_arr, q_arr[:, i])
+            self._log_ax[i].set_xlim(0, max(1.0, self._sim_time))
+            # autoscale Y:
+            self._log_ax[i].relim()
+            self._log_ax[i].autoscale_view()
+            self._log_ax[i].grid()
+
         # ----- RESET LOGIC -----
         self._sim_time += self._dt
         if self._reset_interval > 0.0:
             if self._sim_time >= self._reset_interval:
                 print("RESETTING SIMULATION")
+                print("Paused — press any key or click to continue.")
+                #plt.waitforbuttonpress()   # DOES NOT block the GUI like input() does
+                input("")
+                print("Continuing simulation...")
+
                 self._sim_time = 0.0
                 
                 # choose new random initial conditions:
@@ -162,6 +199,12 @@ class FurataPendulum:
 
                 self._q = np.array([th1, th2, th1d, th2d])
                 self._fwd_kin()   # recompute positions
+
+                # Clear logs so each reset starts fresh
+                self._log_t.clear()
+                self._log_q.clear()
+                for line in self._log_lines:
+                    line.set_data([], [])
         # ------------------------
 
         # Update link lines
@@ -179,10 +222,20 @@ class FurataPendulum:
 
         return self.link1, self.link2
     
+    # def simulate(self, q0, reset_time):
+    #     self._q = q0 # Use provided initial condition
+    #     self._reset_interval = reset_time
+    #     plt.show()
+    
     def simulate(self, q0, reset_time):
-        self._q = q0 # Use provided initial condition
+        self._q = q0
         self._reset_interval = reset_time
-        plt.show()
+
+        # Show animation AND plots
+        plt.show()   # animation
+        self._log_fig.show()    # state plots
+        #plt.pause(0.001)
+
     
     """ CONTROLLERS """
     def prep_LQR(self, Q, R):
@@ -233,11 +286,33 @@ class FurataPendulum:
                       [A41, A42, A43, A44]])
         B = np.array([[0.0], [0.0], [B31], [B41]])
 
+        self._A = A
+        self._B = B 
+
         # Solve LQR
         print(f"denom = {denom}")
         P = solve_continuous_are(A, B, Q, R)
         self._lqr_K = np.linalg.inv(R) @ B.T @ P
         print(self._lqr_K)
+
+    def discretize_LQR(self, Q, R, dt):
+        # Discretize using zero-order hold (ZOH)
+        # cont2discrete returns (Ad, Bd, Cd, Dd, dt)
+        A = self._A
+        B = self._B
+        Ad, Bd, _, _, _ = cont2discrete((A, B, np.eye(A.shape[0]), np.zeros((A.shape[0], B.shape[1]))), dt, method='zoh')
+
+        # Solve discrete algebraic Riccati equation
+        P = solve_discrete_are(Ad, Bd, Q, R)
+        # Compute discrete LQR gain
+        self._Kd = np.linalg.inv(Bd.T @ P @ Bd + R) @ (Bd.T @ P @ Ad)
+        print(self._Kd)
+        
+        self._lqr_K = self._Kd  # Use discrete
+        # self._lqr_K[0,0] = -self._lqr_K[0,0] # Try flipping signs
+        # self._lqr_K[0,2] = -self._lqr_K[0,2]
+
+        return self._Kd
 
 
 if __name__=="__main__":
@@ -267,9 +342,15 @@ if __name__=="__main__":
     
     t20 = random.uniform(-0.1, 0.1)
     t2d0 = random.uniform(-0.05, 0.05)
-    Q = np.eye(4)
+    #Q = np.eye(4)
+    Q = np.diag([0.1,10.0,0.1,10.0]) # Punish pendulum states more
     R = np.array([[1.0]]) # Punish effort, its too high
     print("Prepping LQR")
     simulateFurata.prep_LQR(Q,R)
-    simulateFurata.simulate(np.array([0.0, (np.pi + t20), 0.0, t2d0]), reset_time=1.0)
+    print("~Discretizing LQR~")
+    simulateFurata.discretize_LQR(Q,R, dt = 0.005)
+
+    # Sim
+    #simulateFurata.simulate(np.array([0.0, (np.pi + t20), 0.0, t2d0]), reset_time=2.0)
+    simulateFurata.simulate(np.array([-np.pi/2, (np.pi), 0.0, 0.0]), reset_time=2.0) # Sim with only motor error to start
             
