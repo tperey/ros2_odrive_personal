@@ -122,7 +122,7 @@ class OdriveProfiler(Node):
 
             if self._counter == 2000:  # 500 Hz, so 2000 counts for 4 s
                  # TRANSITION
-                self._control_state = ProfileState.start
+                self._control_state = ProfileState.START
                 self._odrv.axis0.controller.input_pos = 0.25  # [rev]
                 self._counter = 0
                 

@@ -25,3 +25,7 @@ Thumbs.db
 # ROS 2 overlays and temp files
 *.py~
 *.orig
+
+# Sys id files
+*.png
+*.pkl
