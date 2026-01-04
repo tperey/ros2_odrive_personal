@@ -5,6 +5,7 @@ from std_msgs.msg import Bool, Float32, Float32MultiArray
 from inputs import get_gamepad
 from enum import Enum
 import time
+from time import perf_counter
 
 import odrive
 from odrive.enums import * # Get them all
@@ -19,7 +20,7 @@ REV_TO_RAD = 2*np.pi  # Converts rev to radians
 SMALL_ANGLE = 0.5  # Radians about t2 = pi where controller actually kicks in
 TORQUE_CONSTANT = 0.083 # [N-m/A]
 
-SCALE_TORQUE = 0.15 
+SCALE_TORQUE = 1.0 #0.135
 
 class OControlState(Enum):
     # For preventing crazy motions when pendulum in weird states
@@ -29,10 +30,13 @@ class OControlState(Enum):
 V_MAX = 6.0
 
 class FurataController(Node):
-    def __init__(self):
+    def __init__(self, doLog = False):
 
         # General init
         super().__init__('furata_controller')
+        self._logTime = doLog
+        self._last_t = None
+        self._printer = 0
 
         # Params
         self.declare_parameter('doCal', False)
@@ -61,7 +65,12 @@ class FurataController(Node):
         #self._lqr_K = np.array([0.31622777,  7.47867553, 0.40398849,  0.73223273])  # R = 10, manual sign correction
         #self._lqr_K = np.array([0.31622777,  7.47867553, 0.0,  0.73223273])  # R = 10, manual sign correction
         #self._lqr_K = np.array([-1.0, 21.93765365, -1.26986995,  2.20989628])  # R = 1
-        self._lqr_K = np.array([-0.07160001, 4.2962601, -0.11372813, 0.80764367])  # Disc, Q with pend punish
+        #self._lqr_K = np.array([-0.07160001, 4.2962601, -0.11372813, 0.80764367])  # Disc, Q with pend punish
+        #self._lqr_K = np.array([-0.07160001, 2*4.2962601, -0.11372813, 0.80764367])  # Disc, Q with pend punish
+
+        # MANUAL K - requies scale torque of 1.0
+        self._lqr_K = np.array([0.0, 3.0, 0.0, 0.05]) # [Kp_motor, Kp_pend, Kd_motor, Kd_pend]
+
         self.get_logger().info(f"K = {self._lqr_K}")
         self._q_equ = np.array([0.0, np.pi, 0.0, 0.0])
         self.q = np.array([0.0, np.pi, 0.0, 0.0])
@@ -80,8 +89,14 @@ class FurataController(Node):
         # Simply update stored state
         t1 = -1*((self._odrv.axis0.pos_estimate)*REV_TO_RAD)  # Odrive space is NEGATIVE
         t1d = -1*((self._odrv.axis0.vel_estimate)*REV_TO_RAD)
-        t2 = msg.data[0] % (2*np.pi)
-        t2d = msg.data[1] # Parse from encoder
+
+        # LPF
+        # t2 = msg.data[0] % (2*np.pi)
+        # t2d = msg.data[1] # Parse from encoder
+
+        # Kalman
+        t2 = msg.data[2] % (2*np.pi)
+        t2d = msg.data[3]
         
         self.q = np.array([t1, t2, t1d, t2d])
     
@@ -169,6 +184,18 @@ class FurataController(Node):
 
         else:
             self.get_logger().error("Bad control state")
+        
+        # Time logging
+        self._printer += 1
+        now = perf_counter()
+        if self._last_t is None:
+            cur_dt = 0.001  # Default
+        else:
+            cur_dt = now - self._last_t
+
+        if (self._printer % 1000 == 0) and (self._logTime):
+            self.get_logger().info(f"cur_dt = {cur_dt}")
+        self._last_t = now
     
     def shutdown_odrive(self):
         # Stop motor safely
@@ -183,7 +210,7 @@ class FurataController(Node):
 # ---- MAIN -----
 def main():
     rclpy.init()
-    node = FurataController()
+    node = FurataController(doLog = False)
     try:
         rclpy.spin(node)  # Keep node alive and handle callbacks
     except KeyboardInterrupt:
