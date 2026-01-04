@@ -32,7 +32,7 @@ void setup() {
   alpha = expf(-2.0f * PI * CUTOFF_FREQ * DELTA_T);
 
   // put your setup code here, to run once:
-  Serial.begin();
+  Serial.begin(BAUD_RATE);
   furataEncoder.write(0); // Init to 0
 
   // Trigger transmission with a timer
@@ -74,7 +74,7 @@ void sendPacket(void) {
 
   // Copy 32-bit integer into packet (little-endian)
   memcpy(&packet[2], &current_pulses, 4);
-  memcpy(&packet[6], &speed_to_transmit, 4);
+  memcpy(&packet[6], (const void*) &speed_to_transmit, 4);
 
   // Simple checksum = sum of previous 6 bytes modulo 256
   uint8_t checksum = 0;
