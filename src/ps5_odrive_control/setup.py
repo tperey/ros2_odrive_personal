@@ -30,6 +30,7 @@ setup(
             'encoder_node = ps5_odrive_control.encoder_node:main',
             'furata_controller = ps5_odrive_control.furata_controller:main',
             'odrive_profiler = ps5_odrive_control.odrive_profiler:main',
+            'integrated_furata = ps5_odrive_control.integrated_furata:main',
         ],
     },
 )

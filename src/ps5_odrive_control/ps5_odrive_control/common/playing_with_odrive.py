@@ -12,7 +12,7 @@ LEAD_SCREW_PITCH = 5.0 # mm/rev of lead screw
 # 15 rev/sec = Full travel in 1 sec
 
 """ ODRIVE INIT FUNCS """
-def get_Odrive_init(Kp = 20.0, Kv = 0.167, KvI = 0.333, Vmax =4.0, shouldErase = True, shouldReconfig = True, shouldCalibrate = True, ConType = ControlMode.POSITION_CONTROL):
+def get_Odrive_init(Kp = 20.0, Kv = 0.167, KvI = 0.333, Vmax =4.0, shouldErase = True, shouldReconfig = True, shouldCalibrate = True, ConType = ControlMode.POSITION_CONTROL, InType = InputMode.PASSTHROUGH):
     """
     config_Odrive_init
 
@@ -22,8 +22,10 @@ def get_Odrive_init(Kp = 20.0, Kv = 0.167, KvI = 0.333, Vmax =4.0, shouldErase =
     """
     # Connect
     print("Connecting to Odrive...")
-    odrv = odrive.find_sync(timeout = 10.0)
+    odrv = odrive.find_sync(timeout = 30.0)
     print("Connected!")
+    print("~Clearing errors!")
+    odrv.clear_errors()
 
     # *** CONFIGURE ***
 
@@ -73,7 +75,7 @@ def get_Odrive_init(Kp = 20.0, Kv = 0.167, KvI = 0.333, Vmax =4.0, shouldErase =
 
         # CONTROLLER
         odrv.axis0.controller.config.control_mode = ConType
-        odrv.axis0.controller.config.input_mode = InputMode.VEL_RAMP
+        odrv.axis0.controller.config.input_mode = InType
         odrv.axis0.controller.config.vel_limit = Vmax
         odrv.axis0.controller.config.vel_limit_tolerance = 0.3333333333333333*Vmax
         odrv.axis0.config.torque_soft_min = -math.inf
@@ -260,15 +262,28 @@ def get_Odrive_init(Kp = 20.0, Kv = 0.167, KvI = 0.333, Vmax =4.0, shouldErase =
 # Simple sine example WITH MY FUNCTIONS
 def simple_sinusoid():
     odrv0 = get_Odrive_init(Vmax = 4.0)
-    request_state(odrv0.axis0, AxisState.CLOSED_LOOP_CONTROL)
+
+    while True:
+        try:
+            request_state(odrv0.axis0, AxisState.CLOSED_LOOP_CONTROL)
+            print("Axis is now in CLOSED_LOOP_CONTROL!")
+            break
+        except TimeoutError:
+            print("Timeout, retrying...")
+            time.sleep(0.5)
+
     p0 = odrv0.axis0.controller.input_pos # Position sinuosoid
     t0 = time.monotonic()
-    while odrv0.axis0.current_state == AxisState.CLOSED_LOOP_CONTROL:
-        setpoint = p0 + 4.0 * math.sin((time.monotonic() - t0) * 2) # [rev]
-        print(f"goto {setpoint}")
-        print(f"Actually at {odrv0.axis0.pos_estimate}")
-        odrv0.axis0.controller.input_pos = setpoint
-        time.sleep(0.01)
+    try:
+        while odrv0.axis0.current_state == AxisState.CLOSED_LOOP_CONTROL:
+            setpoint = p0 + 0.5 * math.sin((time.monotonic() - t0) * 2) # [rev]
+            print(f"goto {setpoint}")
+            print(f"Actually at {odrv0.axis0.pos_estimate}")
+            odrv0.axis0.controller.input_pos = setpoint
+            #time.sleep(0.1)
+    except KeyboardInterrupt as e:
+        print(f"Keyboard interrupt")
+        request_state(odrv0.axis0, AxisState.IDLE)
 
 if __name__ == "__main__":
     simple_sinusoid()
