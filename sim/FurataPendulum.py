@@ -348,7 +348,7 @@ if __name__=="__main__":
     print("Prepping LQR")
     simulateFurata.prep_LQR(Q,R)
     print("~Discretizing LQR~")
-    simulateFurata.discretize_LQR(Q,R, dt = 0.005)
+    simulateFurata.discretize_LQR(Q,R, dt = 0.001)
 
     # Sim
     #simulateFurata.simulate(np.array([0.0, (np.pi + t20), 0.0, t2d0]), reset_time=2.0)
