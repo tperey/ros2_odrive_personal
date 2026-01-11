@@ -11,6 +11,7 @@ import odrive
 from odrive.enums import * # Get them all
 from ps5_odrive_control.common.playing_with_odrive import get_Odrive_init
 from ps5_odrive_control.common.ReaderMCU import ReaderMCU
+from ps5_odrive_control.encoder_node import SimpleLowFilter
 from odrive.utils import request_state
 
 import numpy as np
@@ -31,7 +32,7 @@ SCALE_TORQUE = 0.2 #0.25 #0.4
 #   Static friction tau_s mean: 0.0667 N·m
 #   Dynamic friction tau_d: 0.0504 N·m
 VEL_KICKSTARTER = 0.3 # [rad/s]
-TAU_STARTER = 0.04 @ # [N/m]
+TAU_STARTER = 0.04     # [N/m]
 TORQUE_KICKSTART = 0.1 # [N/M]. Seems like 0.1 to move in negative direction
 TORQUE_SUSTAINER = 0.05
 
@@ -110,6 +111,17 @@ class FurataIntegrated(Node):
         # self.tel_timer = self.create_timer(self._tel_t, self.telemetry_callback)
         # self.tel_pub = self.create_publisher(TelemetryFurata, 'telemetry_furata', 10)
         # self.ctl_pub = self.create_publisher(Float32MultiArray, 'control_terms', 10)
+
+        # Odrive filtering
+        self._t1 = None
+        self._filt_t1d = 0.0
+        self._filtdt = 0.01
+        self._vel_filter = SimpleLowFilter(self._filtdt, cutoff = 4.0)  # Cutoff in [Hz]
+        self.filt_timer = self.create_timer(self._filtdt, self._filter_callback)
+
+        if doLog:
+            self.filt_pub = self.create_publisher(Float32, 'filt_odrive_velo', 10)
+
     
     # def telemetry_callback(self):
     #     # Publish servo telemetry
@@ -154,6 +166,29 @@ class FurataIntegrated(Node):
     #     control_terms.data = [c0, c1, c2, c3]
     #     self.ctl_pub.publish(control_terms)
 
+    def _filter_callback(self):
+
+        # Update velocity
+        now = perf_counter()
+        if self._t1 is None:
+            cur_dt = 0.01  # Default
+        else:
+            cur_dt = now - self._t1
+
+        self._filt_t1d = self._vel_filter.update(val_rad, new_dt = cur_dt)
+        self._t1 = now
+
+        if self.doLog:
+            self.get_logger().info(f"Filter cur_dt = {cur_dt}")
+
+            # Publish
+            msg = Float32()
+            msg.data = float(self._filt_t1d)
+            self.filt_pub.publish(msg)
+
+
+    """ CONTROL """
+
     def _update_state(self):
         # Simply update stored state
 
@@ -178,7 +213,7 @@ class FurataIntegrated(Node):
 
         # Apply 
         if np.abs(tau_cmd) > np.abs(tau_thresh):  # Only apply if enough error to move (cmd above some thresh)
-            if abs(vel) < vel_thresh: @
+            if abs(vel) < vel_thresh:
                 tau_to_send = direction*tau_kickstart
             else:
                 tau_to_send += np.sign(vel)*tau_sustain 
@@ -228,9 +263,6 @@ class FurataIntegrated(Node):
                     self._tau_des = self._alpha*self._tau_des + (1.0 - self._alpha)*tau
                 else:
                     self._tau_des = tau  # For telemetry
-
-                    def _friction_compensation(self, tau_cmd = 0.0, vel = 0.0, vel_thresh = 0.0,
-                                tau_thresh = np.inf, tau_kickstart = 0.0, tau_sustain = 0.0):
 
                 # Friction (stick-slip) comp
                 self._tau_des = self._friction_compensation(tau_cmd = self._tau_des,
