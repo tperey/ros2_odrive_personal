@@ -21,7 +21,7 @@ REV_TO_RAD = 2*np.pi  # Converts rev to radians
 SMALL_ANGLE = 0.5  # Radians about t2 = pi where controller actually kicks in
 TORQUE_CONSTANT = 0.083 # [N-m/A]
 
-SCALE_TORQUE = 0.22 #0.75 #0.4
+SCALE_TORQUE = 0.75 #1.0 #0.25 #0.22 #0.75 #0.4
 MAX_ALLOWABLE_TORQUE = 10.0 # [N/m] for clipping
 
 # *** FRICTION STUFF ***
@@ -32,8 +32,8 @@ MAX_ALLOWABLE_TORQUE = 10.0 # [N/m] for clipping
 #   Static friction tau_s mean: 0.0667 N·m
 #   Dynamic friction tau_d: 0.0504 N·m
 VEL_KICKSTARTER = 0.3 # [rad/s]
-TAU_STARTER = 0.07     # [N/m]
-TORQUE_KICKSTART = 0.05 # [N/M]. Seems like 0.1 to move in negative direction
+TAU_STARTER = 0.05     # [N/m]
+TORQUE_KICKSTART = 0.07 # [N/M]. Seems like 0.1 to move in negative direction
 TORQUE_SUSTAINER = 0.0 #0.05
 
 class SimpleSpeedFilter():
@@ -130,10 +130,21 @@ class FurataIntegrated(Node):
         #self._lqr_K = np.array([-0.07160001, 4.2962601, -0.11372813, 0.80764367])  # Disc, Q with pend punish
         #self._lqr_K = np.array([-0.07160001, 2*4.2962601, -0.11372813, 0.80764367])  # Disc, Q with pend punish
         #self._lqr_K = np.array([-0.21056844, 11.62858984, -0.33371892, 0.3*2.36114121]) # Disc, Q pend pun, dt = 0.001
-        self._lqr_K = np.array([0.21056844, 11.62858984, 0.33371892, 2.36114121]) # Disc, Q pend pun, dt = 0.001
+        
+        # BEST SO FAR(with scaling of 0.75)
+        #self._lqr_K = np.array([0.21056844, 11.62858984, 0.1*0.33371892, 0.3*2.36114121]) # Disc, Q pend pun, dt = 0.001
+        # BEST SO FAR
+        # self._lqr_K = np.array([0.21056844, 11.62858984, 0.001*0.33371892, 0.003*2.36114121]) # Disc, Q pend pun, dt = 0.001
+        #self._lqr_K = np.array([0.0, 11.62858984, 0.0, 0.0]) # Disc, Q pend pun, dt = 0.001
+
 
         # MANUAL K - requies scale torque of 1.0
-        #self._lqr_K = np.array([0.0, 3.0, 0.0, 0.05]) # [Kp_motor, Kp_pend, Kd_motor, Kd_pend]
+        #self._lqr_K = np.array([0.0, 5.0, 0.2, 0.2]) # [Kp_motor, Kp_pend, Kd_motor, Kd_pend]
+        #self._lqr_K = np.array([0.0, 3.5, 0.0, 0.3])
+        #self._lqr_K = np.array([0.0, 4.5, 0.0, 0.0])
+        #self._lqr_K = np.array([0.0, 5.0, 0.0, 0.0])
+
+        self._lqr_K = np.array([0.0, 8.0, 0.0, 0.15])
 
         self.get_logger().info(f"K = {self._lqr_K}")
         self._q_equ = np.array([0.0, np.pi, 0.0, 0.0])
@@ -141,100 +152,94 @@ class FurataIntegrated(Node):
 
         self._dt = 0.001 # [ms]. So 500 Hz
         self.ctrl_timer = self.create_timer(self._dt, self.control_callback)
+        self._ctrl_filt_t1d = SimpleSpeedFilter(self._dt, cutoff = 4.0)  # Cutoff in [Hz]
+        self._ctrl_filt_tau = SimpleSpeedFilter(self._dt, cutoff = 4.0)
+        self._cur_dt = self._dt
 
         self._alpha = alpha
 
-        # Telemetry
-        # self._tel_t = 0.005 # [ms]. So 200 Hz
         self._tau_des = 0.0  # [N-m]
-        self._fric_flag = 0.0
-        # self.tel_timer = self.create_timer(self._tel_t, self.telemetry_callback)
-        # self.tel_pub = self.create_publisher(TelemetryFurata, 'telemetry_furata', 10)
-        # self.ctl_pub = self.create_publisher(Float32MultiArray, 'control_terms', 10)
 
-        # Odrive filtering
+        # Odrive filtering, and telemetry
+        self._fric_flag = 0.0
         self._t1 = None
         self._filt_t1d = 0.0
-        self._alt_t1d = 0.0
         self._filtdt = 0.01
         self._vel_filter = SimpleSpeedFilter(self._filtdt, cutoff = 4.0)  # Cutoff in [Hz]
-        self.filt_timer = self.create_timer(self._filtdt, self._filter_callback)
+        #self.filt_timer = self.create_timer(self._filtdt, self._filter_callback)
 
-        self.filt_pub = self.create_publisher(Float32MultiArray, 'filt_odrive_velo', 10)
-
-    # def telemetry_callback(self):
-    #     # Publish servo telemetry
-    #     t1 = -1*((self._odrv.axis0.pos_estimate)*REV_TO_RAD)
-    #     t1d = -1*((self._odrv.axis0.vel_estimate)*REV_TO_RAD)
-    #     t2 = self.q[1]
-    #     t2d = self.q[3]
-
-    #     current_cmd = self._odrv.axis0.motor.foc.Iq_setpoint
-    #     current_act = self._odrv.axis0.motor.foc.Iq_measured
-
-    #     tau_cmd = self._tau_des
-    #     tau_act = current_act*TORQUE_CONSTANT
-
-    #     if self._odrv.axis0.current_state == AxisState.CLOSED_LOOP_CONTROL:
-    #         enabled = 1.0
-    #     else:
-    #         enabled = 0.0
-
-    #     # Msg
-    #     outgoing = TelemetryFurata()
-    #     outgoing.name = ["enabled", "motor_pos", "pend_pos", "motor_vel", "pend_vel", "I_cmd", "I_actual", "torq_cmd", "torq_actual"]
-    #     outgoing.data = [enabled, t1, t2, t1d, t2d, current_cmd, current_act, tau_cmd, tau_act]
-    #     self.tel_pub.publish(outgoing)
-
-    #     # Check control terms
-    #     error = self.q - self._q_equ
-
-    #     gains = -self._lqr_K
-    #     if enabled:
-    #         c0 = gains[0]*error[0]
-    #         c1 = gains[1]*error[1]
-    #         c2 = gains[2]*error[2]
-    #         c3 = gains[3]*error[3]
-    #     else:
-    #         c0 = 0.0
-    #         c1 = 0.0
-    #         c2 = 0.0
-    #         c3 = 0.0
-
-    #     control_terms = Float32MultiArray()
-    #     control_terms.data = [c0, c1, c2, c3]
-    #     self.ctl_pub.publish(control_terms)
+        self.tel_pub = self.create_publisher(TelemetryFurata, 'telemetry_furata', 10)
+        #self.ctl_pub = self.create_publisher(Float32MultiArray, 'control_terms', 10)
 
     def _filter_callback(self):
+        # Publish servo telemetry
+        t1 = self.q[0]
+        t1d = self.q[2]
+        t2 = self.q[1]
+        t2d = self.q[3]
 
-        # Update velocity
-        val_revs = self.q[2]
-        now = perf_counter()
-        if self._t1 is None:
-            cur_dt = 0.01  # Default
+        current_cmd = self._odrv.axis0.motor.foc.Iq_setpoint
+        current_act = self._odrv.axis0.motor.foc.Iq_measured
+
+        tau_cmd = self._tau_des
+        tau_act = current_act*TORQUE_CONSTANT
+
+        if self._odrv.axis0.current_state == AxisState.CLOSED_LOOP_CONTROL:
+            enabled = 1.0
         else:
-            cur_dt = now - self._t1
-
-        self._filt_t1d = self._vel_filter.update(val_revs, new_dt = cur_dt)
-        self._t1 = now
-
+            enabled = 0.0
+    
+        # Msg
         if self._logTime:
-            #self.get_logger().info(f"Filter cur_dt = {cur_dt}")
+            outgoing = TelemetryFurata()
+            outgoing.name = ["enabled", "motor_pos", "pend_pos", "motor_vel", "pend_vel", "I_cmd", "I_actual", "torq_cmd", "torq_actual", "fric_flag"]
+            outgoing.data = [enabled, t1, t2, t1d, t2d, current_cmd, current_act, tau_cmd, tau_act, self._fric_flag]
+            self.tel_pub.publish(outgoing)
 
-            # Publish
-            msg = Float32MultiArray()
-            msg.data = [val_revs, float(self._filt_t1d), self.q[1], self._tau_des, self._fric_flag]
-            self.filt_pub.publish(msg)
+        # # Check control terms
+        # error = self.q - self._q_equ
 
+        # gains = -self._lqr_K
+        # if enabled:
+        #     c0 = gains[0]*error[0]
+        #     c1 = gains[1]*error[1]
+        #     c2 = gains[2]*error[2]
+        #     c3 = gains[3]*error[3]
+        # else:
+        #     c0 = 0.0
+        #     c1 = 0.0
+        #     c2 = 0.0
+        #     c3 = 0.0
+
+        # control_terms = Float32MultiArray()
+        # control_terms.data = [c0, c1, c2, c3]
+        # self.ctl_pub.publish(control_terms)
 
     """ CONTROL """
 
     def _update_state(self):
         # Simply update stored state
 
+         # Time logging
+        self._printer += 1
+        now = perf_counter()
+        if self._last_t is None:
+            cur_dt = 0.001  # Default
+        else:
+            cur_dt = now - self._last_t
+
+        if (self._printer % 1000 == 0) and (self._logTime):
+            self.get_logger().info(f"cur_dt = {cur_dt}")
+            self.get_logger().info(f"state = {self.q}")
+            self.get_logger().info(f"Commanding torque = {-self._tau_des}")
+        self._last_t = now
+        self._cur_dt = cur_dt
+
+
         # Odrive
         t1 = -1*((self._odrv.axis0.pos_estimate)*REV_TO_RAD)  # Odrive space is NEGATIVE
-        t1d = -1*((self._odrv.axis0.vel_estimate)*REV_TO_RAD)
+        t1d_raw = -1*((self._odrv.axis0.vel_estimate)*REV_TO_RAD)
+        t1d = self._ctrl_filt_t1d.update(t1d_raw, new_dt = cur_dt) #
 
         # Pendulum
         pend_state = self.mcu_reader.get_pend()
@@ -267,7 +272,6 @@ class FurataIntegrated(Node):
         return tau_to_send
 
     def control_callback(self):
-
         # Get state vars from member var
         self._update_state()  # Read MCU
         q = self.q
@@ -296,19 +300,23 @@ class FurataIntegrated(Node):
             if (t2 < (np.pi + SMALL_ANGLE)) and (t2 > (np.pi - SMALL_ANGLE)):
                 tau = ((-self._lqr_K) @ (q - self._q_equ))
                 tau = tau*SCALE_TORQUE # For some reason, WAYYYY too large
+                self._tau_des = tau
 
-                if self._alpha > 0.0:
-                    self._tau_des = self._alpha*self._tau_des + (1.0 - self._alpha)*tau
-                else:
-                    self._tau_des = tau  # For telemetry
+                # if self._alpha > 0.0:
+                #     self._tau_des = self._alpha*self._tau_des + (1.0 - self._alpha)*tau
+                # else:
+                #     self._tau_des = tau  # For telemetry
 
-                # Friction (stick-slip) comp
+                # # Friction (stick-slip) comp
                 self._tau_des = self._friction_compensation(tau_cmd = self._tau_des,
                                                             vel = t1d,
                                                             vel_thresh = VEL_KICKSTARTER,
                                                             tau_thresh = TAU_STARTER,
                                                             tau_kickstart = TORQUE_KICKSTART,
                                                             tau_sustain = TORQUE_SUSTAINER)
+                # Filter noise out of command signal
+                # self._tau_des = self._ctrl_filt_tau.update(self._tau_des, new_dt = self._cur_dt) 
+
                 # Safe clipping
                 self._tau_des = np.clip(self._tau_des, -MAX_ALLOWABLE_TORQUE, MAX_ALLOWABLE_TORQUE)
                 self._odrv.axis0.controller.input_torque = -self._tau_des  # Sign at motor level is opposite
@@ -322,20 +330,6 @@ class FurataIntegrated(Node):
 
         else:
             self.get_logger().error("Bad control state")
-        
-        # Time logging
-        self._printer += 1
-        now = perf_counter()
-        if self._last_t is None:
-            cur_dt = 0.001  # Default
-        else:
-            cur_dt = now - self._last_t
-
-        if (self._printer % 1000 == 0) and (self._logTime):
-            self.get_logger().info(f"cur_dt = {cur_dt}")
-            self.get_logger().info(f"state = {self.q}")
-            self.get_logger().info(f"Commanding torque = {-self._tau_des}")
-        self._last_t = now
     
     def shutdown_odrive(self):
         # Stop motor safely
