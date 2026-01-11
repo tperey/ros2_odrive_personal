@@ -22,8 +22,7 @@ SMALL_ANGLE = 0.5  # Radians about t2 = pi where controller actually kicks in
 TORQUE_CONSTANT = 0.083 # [N-m/A]
 
 SCALE_TORQUE = 0.2 #0.25 #0.4
-
-MAX_ALLOWABLE_TORQUE = 2.0 # [N/m] for clipping
+MAX_ALLOWABLE_TORQUE = 3.0 # [N/m] for clipping
 
 # *** FRICTION STUFF ***
 # Fitted parameters:
@@ -33,9 +32,9 @@ MAX_ALLOWABLE_TORQUE = 2.0 # [N/m] for clipping
 #   Static friction tau_s mean: 0.0667 N·m
 #   Dynamic friction tau_d: 0.0504 N·m
 VEL_KICKSTARTER = 0.3 # [rad/s]
-TAU_STARTER = 0.04     # [N/m]
+TAU_STARTER = 0.05     # [N/m]
 TORQUE_KICKSTART = 0.1 # [N/M]. Seems like 0.1 to move in negative direction
-TORQUE_SUSTAINER = 0.05
+TORQUE_SUSTAINER = 0.0 #0.05
 
 class SimpleSpeedFilter():
     def __init__(self, dt, cutoff):
@@ -222,7 +221,7 @@ class FurataIntegrated(Node):
 
             # Publish
             msg = Float32MultiArray()
-            msg.data = [val_revs, float(self._filt_t1d)]
+            msg.data = [val_revs, float(self._filt_t1d), self.q[1], self._tau_des]
             self.filt_pub.publish(msg)
 
 
@@ -253,15 +252,9 @@ class FurataIntegrated(Node):
         # Apply 
         if np.abs(tau_cmd) > np.abs(tau_thresh):  # Only apply if enough error to move (cmd above some thresh)
             if abs(vel) < vel_thresh:
-                tau_to_send = direction*tau_kickstart
+                tau_to_send += direction_cmd*tau_kickstart
             else:
                 tau_to_send += np.sign(vel)*tau_sustain 
-
-        # Apply kickstart
-        if abs(vel) < VEL_KICKSTARTER:  #Static friction
-            tau_to_send = direction*TORQUE_KICKSTART
-        else: 
-            tau_to_send += np.sign(vel)*TORQUE_SUSTAINER # Always oppose direction of motion
 
         #print(f"tau_to_send = {tau_to_send}")
 
