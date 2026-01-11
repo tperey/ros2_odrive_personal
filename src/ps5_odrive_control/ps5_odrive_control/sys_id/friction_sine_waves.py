@@ -45,7 +45,13 @@ TIME_PER_FREQ = 10.0 # [s]
 
 # CYCLES_PER_FREQ = 10 # [n]
 
-# Friction stuff
+# *** FRICTION STUFF ***
+# Fitted parameters:
+#   Inertia J: 0.0024 kg·m²
+#   Viscous damping b: 0.0005 N·m·s/rad
+#   Static friction tau_s PEAK: 0.1195 N·m
+#   Static friction tau_s mean: 0.0667 N·m
+#   Dynamic friction tau_d: 0.0504 N·m
 VEL_KICKSTARTER = 0.3 # [rad/s]
 TORQUE_KICKSTART = 0.1 # [N/M]. Seems like 0.1 to move in negative direction
 TORQUE_SUSTAINER = 0.05
