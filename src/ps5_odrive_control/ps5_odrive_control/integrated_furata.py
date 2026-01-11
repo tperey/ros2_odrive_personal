@@ -24,6 +24,8 @@ TORQUE_CONSTANT = 0.083 # [N-m/A]
 
 SCALE_TORQUE = 0.2 #0.25 #0.4
 
+MAX_ALLOWABLE_TORQUE = 2.0 # [N/m] for clipping
+
 # *** FRICTION STUFF ***
 # Fitted parameters:
 #   Inertia J: 0.0024 kg·m²
@@ -271,6 +273,8 @@ class FurataIntegrated(Node):
                                                             tau_thresh = TAU_STARTER,
                                                             tau_kickstart = TORQUE_KICKSTART,
                                                             tau_sustain = TORQUE_SUSTAINER)
+                # Safe clipping
+                self._tau_des = np.clip(self._tau_des, -MAX_ALLOWABLE_TORQUE, MAX_ALLOWABLE_TORQUE)
                 self._odrv.axis0.controller.input_torque = -self._tau_des  # Sign at motor level is opposite
             else:
                 # Stay in IDLE
