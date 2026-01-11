@@ -57,6 +57,17 @@ void setup() {
 
   // put your setup code here, to run once:
   Serial.begin(BAUD_RATE);
+  
+  // Wait until Python signals ready
+  while (true) {
+    if (Serial.available()) {
+      byte b = Serial.read();
+      if (b == 0x01) {  // Python startup byte
+        break;
+      }
+    }
+  }
+  
   furataEncoder.write(0); // Init to 0
 
   // Trigger transmission with a timer

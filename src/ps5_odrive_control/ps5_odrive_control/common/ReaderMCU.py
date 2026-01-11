@@ -29,6 +29,10 @@ class ReaderMCU():
         try:
             self.ser = serial.Serial(port, baud, timeout=0.1)
             print(f"-----Connected to MCU on {port} at {baud} baud-----")
+            # Signal start
+            time.sleep(0.2)  # Optional: wait for Teensy reset on serial open
+            self.ser.write(b'\x01') # Ready byte
+            print(f"-----Signaled startup-----")
         except serial.SerialException as e:
             print(f"~~~~~Failed to MCU to MCU: {e}~~~~~")
             raise e

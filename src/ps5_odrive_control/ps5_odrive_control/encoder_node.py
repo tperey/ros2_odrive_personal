@@ -6,6 +6,7 @@ from rclpy.node import Node
 from std_msgs.msg import Float32MultiArray
 import serial
 from time import perf_counter
+import time
 
 RAD_PER_PULSE = (2.0 * 3.1415926535)/2400
 PACKET_SIZE = 19
@@ -75,6 +76,10 @@ class EncoderNode(Node):
         try:
             self.ser = serial.Serial(port, baud, timeout=0.1)
             self.get_logger().info(f"Connected to MCU on {port} at {baud} baud")
+
+            # Signal start
+            time.sleep(0.2)  # Optional: wait for Teensy reset on serial open
+            self.ser.write(b'\x01') # Ready byte
         except serial.SerialException as e:
             self.get_logger().error(f"Failed to MCU to MCU: {e}")
             raise e

@@ -157,7 +157,7 @@ class FurataIntegrated(Node):
         self._alt_t1d = 0.0
         self._filtdt = 0.01
         self._vel_filter = SimpleSpeedFilter(self._filtdt, cutoff = 4.0)  # Cutoff in [Hz]
-        #self.filt_timer = self.create_timer(self._filtdt, self._filter_callback)
+        self.filt_timer = self.create_timer(self._filtdt, self._filter_callback)
 
         self.filt_pub = self.create_publisher(Float32MultiArray, 'filt_odrive_velo', 10)
 
@@ -214,7 +214,7 @@ class FurataIntegrated(Node):
         else:
             cur_dt = now - self._t1
 
-        self._filt_t1d = self._vel_filter.var_update(val_revs, dt = cur_dt)
+        self._filt_t1d = self._vel_filter.update(val_revs, new_dt = cur_dt)
         self._t1 = now
 
         if self._logTime:
@@ -223,7 +223,7 @@ class FurataIntegrated(Node):
             # Publish
             msg = Float32MultiArray()
             msg.data = [val_revs, float(self._filt_t1d)]
-            #self.filt_pub.publish(msg)
+            self.filt_pub.publish(msg)
 
 
     """ CONTROL """
