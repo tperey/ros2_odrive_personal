@@ -14,6 +14,7 @@ class SimpleLowFilter():
     def __init__(self, dt, cutoff):
         self._dt = dt
         self._alpha = np.exp(-2*np.pi*dt*cutoff)
+        self.tau = 1.0 / (2.0*np.pi*cutoff)
 
         self._prev_pos = 0.0
         self._prev_velo = 0.0
@@ -32,6 +33,26 @@ class SimpleLowFilter():
         new_velo = self._alpha*self._prev_velo + (1.0 - self._alpha)*cur_velo
         self._prev_pos = pos  # Update previous
         self._prev_velo = new_velo
+        return new_velo
+    
+    def var_update(self, pos, dt):
+        # If dt varies
+
+        dt = max(dt, 1e-6)  # avoid division by zero
+
+        # Raw velocity
+        cur_velo = (pos - self._prev_pos) / dt
+
+        # Compute alpha dynamically
+        self._alpha = dt / (self.tau + dt)
+
+        # Filter velocity
+        new_velo = self._prev_velo + self._alpha * (cur_velo - self._prev_velo)
+
+        # Save previous values
+        self._prev_pos = pos
+        self._prev_velo = new_velo
+
         return new_velo
 
 class EncoderNode(Node):

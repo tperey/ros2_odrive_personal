@@ -11,7 +11,6 @@ import odrive
 from odrive.enums import * # Get them all
 from ps5_odrive_control.common.playing_with_odrive import get_Odrive_init
 from ps5_odrive_control.common.ReaderMCU import ReaderMCU
-from ps5_odrive_control.encoder_node import SimpleLowFilter
 from odrive.utils import request_state
 
 import numpy as np
@@ -37,6 +36,44 @@ VEL_KICKSTARTER = 0.3 # [rad/s]
 TAU_STARTER = 0.04     # [N/m]
 TORQUE_KICKSTART = 0.1 # [N/M]. Seems like 0.1 to move in negative direction
 TORQUE_SUSTAINER = 0.05
+
+class SimpleSpeedFilter():
+    def __init__(self, dt, cutoff):
+        self._dt = dt
+        self._alpha = np.exp(-2*np.pi*dt*cutoff)
+        self._tau = 1.0 / (2.0*np.pi*cutoff)
+
+        self._prev_velo = 0.0
+
+        self._cutoff = cutoff
+    
+    def update(self, cur_velo, new_dt = 0.0):
+
+        # Allow dynamic dt
+        if new_dt > 0.0:
+            self._dt = new_dt
+            self._alpha = np.exp(-2*np.pi*self._dt*self._cutoff)
+
+        # Passed in a pos, compute velo
+        new_velo = self._alpha*self._prev_velo + (1.0 - self._alpha)*cur_velo
+        self._prev_velo = new_velo  # Update previous
+        return new_velo
+    
+    def var_update(self, cur_velo, dt):
+        # If dt varies
+        dt = max(dt, 1e-6)  # avoid division by zero
+
+        # Compute alpha dynamically
+        self._alpha = dt / (self._tau + dt)
+
+        # Filter velocity
+        new_velo = self._prev_velo + self._alpha * (cur_velo - self._prev_velo)
+
+        # Save previous values
+        self._prev_velo = new_velo
+
+        return new_velo
+
 
 class OControlState(Enum):
     # For preventing crazy motions when pendulum in weird states
@@ -117,11 +154,12 @@ class FurataIntegrated(Node):
         # Odrive filtering
         self._t1 = None
         self._filt_t1d = 0.0
+        self._alt_t1d = 0.0
         self._filtdt = 0.01
-        self._vel_filter = SimpleLowFilter(self._filtdt, cutoff = 4.0)  # Cutoff in [Hz]
-        self.filt_timer = self.create_timer(self._filtdt, self._filter_callback)
+        self._vel_filter = SimpleSpeedFilter(self._filtdt, cutoff = 4.0)  # Cutoff in [Hz]
+        #self.filt_timer = self.create_timer(self._filtdt, self._filter_callback)
 
-        self.filt_pub = self.create_publisher(Float32, 'filt_odrive_velo', 10)
+        self.filt_pub = self.create_publisher(Float32MultiArray, 'filt_odrive_velo', 10)
 
     # def telemetry_callback(self):
     #     # Publish servo telemetry
@@ -169,23 +207,23 @@ class FurataIntegrated(Node):
     def _filter_callback(self):
 
         # Update velocity
-        val_revs = self.q[1]
+        val_revs = self.q[2]
         now = perf_counter()
         if self._t1 is None:
             cur_dt = 0.01  # Default
         else:
             cur_dt = now - self._t1
 
-        self._filt_t1d = self._vel_filter.update(val_revs, new_dt = cur_dt)
+        self._filt_t1d = self._vel_filter.var_update(val_revs, dt = cur_dt)
         self._t1 = now
 
         if self._logTime:
-            self.get_logger().info(f"Filter cur_dt = {cur_dt}")
+            #self.get_logger().info(f"Filter cur_dt = {cur_dt}")
 
             # Publish
-            msg = Float32()
-            msg.data = float(self._filt_t1d)
-            self.filt_pub.publish(msg)
+            msg = Float32MultiArray()
+            msg.data = [val_revs, float(self._filt_t1d)]
+            #self.filt_pub.publish(msg)
 
 
     """ CONTROL """
