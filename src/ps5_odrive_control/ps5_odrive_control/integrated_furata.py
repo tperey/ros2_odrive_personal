@@ -121,10 +121,8 @@ class FurataIntegrated(Node):
         self._vel_filter = SimpleLowFilter(self._filtdt, cutoff = 4.0)  # Cutoff in [Hz]
         self.filt_timer = self.create_timer(self._filtdt, self._filter_callback)
 
-        if doLog:
-            self.filt_pub = self.create_publisher(Float32, 'filt_odrive_velo', 10)
+        self.filt_pub = self.create_publisher(Float32, 'filt_odrive_velo', 10)
 
-    
     # def telemetry_callback(self):
     #     # Publish servo telemetry
     #     t1 = -1*((self._odrv.axis0.pos_estimate)*REV_TO_RAD)
@@ -171,16 +169,17 @@ class FurataIntegrated(Node):
     def _filter_callback(self):
 
         # Update velocity
+        val_revs = self.q[1]
         now = perf_counter()
         if self._t1 is None:
             cur_dt = 0.01  # Default
         else:
             cur_dt = now - self._t1
 
-        self._filt_t1d = self._vel_filter.update(val_rad, new_dt = cur_dt)
+        self._filt_t1d = self._vel_filter.update(val_revs, new_dt = cur_dt)
         self._t1 = now
 
-        if self.doLog:
+        if self._logTime:
             self.get_logger().info(f"Filter cur_dt = {cur_dt}")
 
             # Publish
