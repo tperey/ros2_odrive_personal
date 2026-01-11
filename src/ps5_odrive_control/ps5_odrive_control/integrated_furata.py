@@ -23,6 +23,18 @@ TORQUE_CONSTANT = 0.083 # [N-m/A]
 
 SCALE_TORQUE = 0.2 #0.25 #0.4
 
+# *** FRICTION STUFF ***
+# Fitted parameters:
+#   Inertia J: 0.0024 kg·m²
+#   Viscous damping b: 0.0005 N·m·s/rad
+#   Static friction tau_s PEAK: 0.1195 N·m
+#   Static friction tau_s mean: 0.0667 N·m
+#   Dynamic friction tau_d: 0.0504 N·m
+VEL_KICKSTARTER = 0.3 # [rad/s]
+TAU_STARTER = 0.04 @ # [N/m]
+TORQUE_KICKSTART = 0.1 # [N/M]. Seems like 0.1 to move in negative direction
+TORQUE_SUSTAINER = 0.05
+
 class OControlState(Enum):
     # For preventing crazy motions when pendulum in weird states
     OFF = 0
@@ -155,6 +167,31 @@ class FurataIntegrated(Node):
         t2d = pend_state[3]
         
         self.q = np.array([t1, t2, t1d, t2d])
+    
+    def _friction_compensation(self, tau_cmd = 0.0, vel = 0.0, vel_thresh = 0.0,
+                                tau_thresh = np.inf, tau_kickstart = 0.0, tau_sustain = 0.0):
+
+        tau_to_send = tau_cmd
+
+        # Get telemetry
+        direction_cmd = np.sign(tau_cmd)
+
+        # Apply 
+        if np.abs(tau_cmd) > np.abs(tau_thresh):  # Only apply if enough error to move (cmd above some thresh)
+            if abs(vel) < vel_thresh: @
+                tau_to_send = direction*tau_kickstart
+            else:
+                tau_to_send += np.sign(vel)*tau_sustain 
+
+        # Apply kickstart
+        if abs(vel) < VEL_KICKSTARTER:  #Static friction
+            tau_to_send = direction*TORQUE_KICKSTART
+        else: 
+            tau_to_send += np.sign(vel)*TORQUE_SUSTAINER # Always oppose direction of motion
+
+        #print(f"tau_to_send = {tau_to_send}")
+
+        return tau_to_send
 
     def control_callback(self):
 
@@ -191,6 +228,17 @@ class FurataIntegrated(Node):
                     self._tau_des = self._alpha*self._tau_des + (1.0 - self._alpha)*tau
                 else:
                     self._tau_des = tau  # For telemetry
+
+                    def _friction_compensation(self, tau_cmd = 0.0, vel = 0.0, vel_thresh = 0.0,
+                                tau_thresh = np.inf, tau_kickstart = 0.0, tau_sustain = 0.0):
+
+                # Friction (stick-slip) comp
+                self._tau_des = self._friction_compensation(tau_cmd = self._tau_des,
+                                                            vel = t1d,
+                                                            vel_thresh = VEL_KICKSTARTER,
+                                                            tau_thresh = TAU_STARTER,
+                                                            tau_kickstart = TORQUE_KICKSTART,
+                                                            tau_sustain = TORQUE_SUSTAINER)
                 self._odrv.axis0.controller.input_torque = -self._tau_des  # Sign at motor level is opposite
             else:
                 # Stay in IDLE
