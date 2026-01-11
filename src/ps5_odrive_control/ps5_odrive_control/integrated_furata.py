@@ -21,8 +21,8 @@ REV_TO_RAD = 2*np.pi  # Converts rev to radians
 SMALL_ANGLE = 0.5  # Radians about t2 = pi where controller actually kicks in
 TORQUE_CONSTANT = 0.083 # [N-m/A]
 
-SCALE_TORQUE = 0.2 #0.25 #0.4
-MAX_ALLOWABLE_TORQUE = 3.0 # [N/m] for clipping
+SCALE_TORQUE = 0.22 #0.75 #0.4
+MAX_ALLOWABLE_TORQUE = 10.0 # [N/m] for clipping
 
 # *** FRICTION STUFF ***
 # Fitted parameters:
@@ -32,8 +32,8 @@ MAX_ALLOWABLE_TORQUE = 3.0 # [N/m] for clipping
 #   Static friction tau_s mean: 0.0667 N·m
 #   Dynamic friction tau_d: 0.0504 N·m
 VEL_KICKSTARTER = 0.3 # [rad/s]
-TAU_STARTER = 0.05     # [N/m]
-TORQUE_KICKSTART = 0.1 # [N/M]. Seems like 0.1 to move in negative direction
+TAU_STARTER = 0.07     # [N/m]
+TORQUE_KICKSTART = 0.05 # [N/M]. Seems like 0.1 to move in negative direction
 TORQUE_SUSTAINER = 0.0 #0.05
 
 class SimpleSpeedFilter():
@@ -129,7 +129,8 @@ class FurataIntegrated(Node):
         #self._lqr_K = np.array([-1.0, 21.93765365, -1.26986995,  2.20989628])  # R = 1
         #self._lqr_K = np.array([-0.07160001, 4.2962601, -0.11372813, 0.80764367])  # Disc, Q with pend punish
         #self._lqr_K = np.array([-0.07160001, 2*4.2962601, -0.11372813, 0.80764367])  # Disc, Q with pend punish
-        self._lqr_K = np.array([-0.21056844, 11.62858984, -0.33371892, 0.2*2.36114121]) # Disc, Q pend pun, dt = 0.001
+        #self._lqr_K = np.array([-0.21056844, 11.62858984, -0.33371892, 0.3*2.36114121]) # Disc, Q pend pun, dt = 0.001
+        self._lqr_K = np.array([0.21056844, 11.62858984, 0.33371892, 2.36114121]) # Disc, Q pend pun, dt = 0.001
 
         # MANUAL K - requies scale torque of 1.0
         #self._lqr_K = np.array([0.0, 3.0, 0.0, 0.05]) # [Kp_motor, Kp_pend, Kd_motor, Kd_pend]
@@ -146,6 +147,7 @@ class FurataIntegrated(Node):
         # Telemetry
         # self._tel_t = 0.005 # [ms]. So 200 Hz
         self._tau_des = 0.0  # [N-m]
+        self._fric_flag = 0.0
         # self.tel_timer = self.create_timer(self._tel_t, self.telemetry_callback)
         # self.tel_pub = self.create_publisher(TelemetryFurata, 'telemetry_furata', 10)
         # self.ctl_pub = self.create_publisher(Float32MultiArray, 'control_terms', 10)
@@ -221,7 +223,7 @@ class FurataIntegrated(Node):
 
             # Publish
             msg = Float32MultiArray()
-            msg.data = [val_revs, float(self._filt_t1d), self.q[1], self._tau_des]
+            msg.data = [val_revs, float(self._filt_t1d), self.q[1], self._tau_des, self._fric_flag]
             self.filt_pub.publish(msg)
 
 
@@ -253,8 +255,12 @@ class FurataIntegrated(Node):
         if np.abs(tau_cmd) > np.abs(tau_thresh):  # Only apply if enough error to move (cmd above some thresh)
             if abs(vel) < vel_thresh:
                 tau_to_send += direction_cmd*tau_kickstart
+                self._fric_flag = 1.0
             else:
-                tau_to_send += np.sign(vel)*tau_sustain 
+                tau_to_send += np.sign(vel)*tau_sustain
+                self._fric_flag = 0.0
+        else:
+            self._fric_flag = 0.0
 
         #print(f"tau_to_send = {tau_to_send}")
 
