@@ -70,7 +70,7 @@ V_MAX = 6.0
 
 """ FurataIntegrated: single node which (1) gets pendulum/encoder info
     AND (2) controls Odrive motor """
-class FurataIntegrated(Node):
+class VelocityFurata(Node):
     def __init__(self,
                  port='/dev/ttyACM0',
                  baud=115200,
@@ -114,8 +114,9 @@ class FurataIntegrated(Node):
     
         # Controller
         # MANUAL K -  scale torque of 1.0
-        # [ (rev/s)/rad,  (rev/s)/(rev/s), ()]
-        self._lqr_K = np.array([0.0, 8.0, 0.0, 0.15])
+        # [ (rev/s)/rad,  (rev/s)/rad, (rev/s)/(rev/s), (rev/s)/(rad/s)]
+        #self._lqr_K = np.array([0.0, 5.0, 0.0, 0.0])
+        self._lqr_K = np.array([0.0, 10.0, 0.0, 1.0])
 
         self.get_logger().info(f"K = {self._lqr_K}")
         self._q_equ = np.array([0.0, np.pi, 0.0, 0.0])
@@ -201,6 +202,7 @@ class FurataIntegrated(Node):
         if (self._printer % 1000 == 0) and (self._logTime):
             self.get_logger().info(f"cur_dt = {cur_dt}")
             self.get_logger().info(f"state = {self.q}")
+        if (self._printer % 100 == 0) and (self._logTime):
             self.get_logger().info(f"Commanding torque = {-self._tau_des}")
         self._last_t = now
         self._cur_dt = cur_dt
@@ -279,7 +281,7 @@ class FurataIntegrated(Node):
 # ---- MAIN -----
 def main():
     rclpy.init()
-    node = FurataIntegrated(doLog = True, alpha = 0.0)
+    node = VelocityFurata(doLog = True, alpha = 0.0)
     try:
         rclpy.spin(node)  # Keep node alive and handle callbacks
     except KeyboardInterrupt:
