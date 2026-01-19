@@ -16,7 +16,7 @@ def get_Odrive_init(Kp = 20.0, Kv = 0.167, KvI = 0.333, Vmax =4.0, shouldErase =
     """
     config_Odrive_init
 
-    Runs Odrive configuration with initial parameters (i.e. using 24 V, 14 A power supply)
+    Runs Odrive configuration with initial parameters
     Copied from
     
     """
