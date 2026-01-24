@@ -111,12 +111,31 @@ class VelocityFurata(Node):
             baud=115200,
             logTime = False
         )
+
+        # Set initial pos
+        pend_state = self.mcu_reader.get_pend()
+        t2i = pend_state[2] % (2*np.pi)
+        if (t2i < (np.pi + SMALL_ANGLE)) and (t2i > (np.pi - SMALL_ANGLE)):
+            self._q_equ = np.array([0.0, t2i, 0.0, 0.0])
+            self.get_logger().info(f"```Set initial state to {t2i}")
+        else:
+            self._q_equ = np.array([0.0, np.pi, 0.0, 0.0])
+
+
+        # Read initial pendulum pos to determine what balance point is
+        
     
         # Controller
         # MANUAL K -  scale torque of 1.0
         # [ (rev/s)/rad,  (rev/s)/rad, (rev/s)/(rev/s), (rev/s)/(rad/s)]
         #self._lqr_K = np.array([0.0, 5.0, 0.0, 0.0])
-        self._lqr_K = np.array([0.0, 10.0, 0.0, 1.0])
+        # self._lqr_K = np.array([0.0, 10.0, 0.0, 0.0])  # Lots of oscillations
+        # self._lqr_K = np.array([0.0, 5.0, 0.0, 0.01])
+        # self._lqr_K = np.array([0.0, 15.0, 0.0, 0.0])
+
+        # self._lqr_K = np.array([0.0, 20.0, 0.01, 0.01])
+        #self._lqr_K = np.array([0.0, 20.0, 0.01, 0.00])
+        self._lqr_K = np.array([0.0, 10.0, 0.0, 0.02])
 
         self.get_logger().info(f"K = {self._lqr_K}")
         self._q_equ = np.array([0.0, np.pi, 0.0, 0.0])
