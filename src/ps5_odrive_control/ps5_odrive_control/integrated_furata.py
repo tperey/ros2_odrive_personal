@@ -25,7 +25,7 @@ TORQUE_CONSTANT = 0.083 # [N-m/A]
 SCALE_TORQUE = 0.75 #1.0 #0.25 #0.22 #0.75 #0.4
 MAX_ALLOWABLE_TORQUE = 10.0 # [N/m] for clipping
 
-DEADBAND_POS_INTEGRAL = 0.02 # [rad]
+DEADBAND_POS_INTEGRAL = 0.05 # [rad]
 DEADBAND_VEL_INTEGRAL = 0.3 # [rad/s]
 
 # *** FRICTION STUFF ***
@@ -122,7 +122,7 @@ class FurataIntegrated(Node):
 
         # MCU Reader
         self.mcu_reader = ReaderMCU(
-            port='/dev/ttyACM3',   # change to your MCU port
+            port='/dev/ttyACM2',   # change to your MCU port
             baud=115200,
             logTime = False
         )
@@ -162,9 +162,15 @@ class FurataIntegrated(Node):
         # self._ki = 170.0
 
         self._lqr_K = np.array([0.0, 2.0, 0.0, 0.05])
-        self._ki = 2.0
+        self._lqr_K = np.array([0.0, 2.5, 0.0, 0.05])
+        #self._lqr_K = np.array([0.0, 3.5, 0.0, 0.05])
+        self._ki = np.array([0.0, 2.0, 0.0, 0.0])
+        #self._ki = np.array([0.0, 4.0, 0.0, 0.0])
+
+        self._ki = np.array([0.0, 0.0, 0.0, 0.0])
 
         self.get_logger().info(f"K = {self._lqr_K}")
+        self.get_logger().info(f"Ki = {self._ki}")
         self._q_equ = np.array([0.0, np.pi, 0.0, 0.0])
         self.q = np.array([0.0, np.pi, 0.0, 0.0])
 
@@ -179,8 +185,8 @@ class FurataIntegrated(Node):
         self._tau_des = 0.0  # [N-m]
 
         # Error
-        self._sum_e = 0.0
-        self._integral_decay = 1.0 #0.995
+        self._sum_e = np.array([0.0, 0.0, 0.0, 0.0])
+        self._integral_decay = 0.995#0.999
 
         # Odrive filtering, and telemetry
         self._fric_flag = 0.0
@@ -318,6 +324,7 @@ class FurataIntegrated(Node):
                 request_state(self._odrv.axis0, AxisState.CLOSED_LOOP_CONTROL)  # Enable O-drive
                 self._control_state = OControlState.ON
                 self._odrv.axis0.pos_estimate = 0.0  # 0 the position on start
+                self._sum_e = np.array([0.0, 0.0, 0.0, 0.0])
                 self.get_logger().info("---Enabling motor")
             else:
                 # Stay in IDLE
@@ -348,8 +355,19 @@ class FurataIntegrated(Node):
                 # self._tau_des = self._ctrl_filt_tau.update(self._tau_des, new_dt = self._cur_dt) 
 
                 # Integral action
-                self._sum_e += (t2 - self._q_equ[1])*(self._cur_dt)
-                self._tau_des -= (self._ki)*(self._sum_e)
+                # if ((np.abs(t2d - self._q_equ[3]) > DEADBAND_VEL_INTEGRAL)):
+                # if ((np.abs(t2 - self._q_equ[1]) > DEADBAND_POS_INTEGRAL) or (np.abs(t2d - self._q_equ[3]) > DEADBAND_VEL_INTEGRAL)):
+                if ((np.abs(t2 - self._q_equ[1]) > DEADBAND_POS_INTEGRAL)):
+                    # Only keep integrating if UNBALANCED (outside deadband)
+                    self._sum_e +=  (q - self._q_equ)*(self._cur_dt)
+                else:
+                    self._sum_e *= self._integral_decay  # Decay once balanced
+                self._tau_des -= (self._ki) @ (self._sum_e)
+
+                # # Integral action: NO DEADBAND, BUT ALWAYS DECAY
+                # self._sum_e +=  (q - self._q_equ)*(self._cur_dt)
+                # self._sum_e *= self._integral_decay  # Decay once balanced
+                # self._tau_des -= (self._ki) @ (self._sum_e)
 
                 # Safe clipping
                 self._tau_des = np.clip(self._tau_des, -MAX_ALLOWABLE_TORQUE, MAX_ALLOWABLE_TORQUE)
@@ -359,6 +377,7 @@ class FurataIntegrated(Node):
                 self._odrv.axis0.controller.input_torque = 0.0
                 self._tau_des = 0.0
                 request_state(self._odrv.axis0, AxisState.IDLE)
+                self._sum_e = np.array([0.0, 0.0, 0.0, 0.0])
                 self._control_state = OControlState.OFF
                 self.get_logger().info("~~~DISabling motor")
 
@@ -369,9 +388,11 @@ class FurataIntegrated(Node):
         self.q_log.append((q - self._q_equ))
         self.tau_log.append(self._tau_des)
         self.dt_log.append(self._cur_dt)
-        self.sum_e_log.append(-(self._ki)*(self._sum_e))
+        self.sum_e_log.append(-(self._ki)@(self._sum_e))
         self.motor_state_log.append(self._odrv.axis0.motor.foc.Iq_measured*TORQUE_CONSTANT)
-        if ((np.abs(t2d - self._q_equ[3]) > DEADBAND_VEL_INTEGRAL)):
+        #if ((np.abs(t2d - self._q_equ[3]) > DEADBAND_VEL_INTEGRAL)):
+        #if ((np.abs(t2 - self._q_equ[1]) > DEADBAND_POS_INTEGRAL) or (np.abs(t2d - self._q_equ[3]) > DEADBAND_VEL_INTEGRAL)):
+        if ((np.abs(t2 - self._q_equ[1]) > DEADBAND_POS_INTEGRAL)):
             self.integrating.append(1)
         else:
             self.integrating.append(0)
@@ -395,21 +416,21 @@ class FurataIntegrated(Node):
             motor_state_arr = np.array(self.motor_state_log)
             integrating_arr = np.array(self.integrating)
 
-            max_idx = np.max(np.array([len(q_arr[:,1]), len(tau_arr), len(sum_e_arr), len(dt_arr)]))
+            max_idx = np.min(np.array([len(q_arr[:,1]), len(tau_arr), len(sum_e_arr), len(dt_arr), len(motor_state_arr), len(integrating_arr)]))
 
             time_vec = np.arange(q_arr.shape[0]) * self._dt  # approximate time
 
             fig, axs = plt.subplots(4, 1, figsize=(15, 9), sharex=True)
 
             # Plot pendulum and motor positions
-            #axs[0].plot(time_vec, q_arr[:,0], label='Motor pos t1 [rad]')
+            #axs[0].plot(time_vec[:max_idx], q_arr[:max_idx,0], label='Motor pos t1 [rad]')
             axs[0].plot(time_vec[:max_idx], q_arr[:max_idx,1], label='Pend pos t2 [rad]')
             axs[0].set_ylabel('Position [rad]')
             axs[0].legend()
             axs[0].grid(True)
 
             # Plot velocities
-            #axs[1].plot(time_vec, q_arr[:,2], label='Motor vel t1d [rad/s]')
+            #axs[1].plot(time_vec[:max_idx], q_arr[:max_idx,2], label='Motor vel t1d [rad/s]')
             axs[1].plot(time_vec[:max_idx], q_arr[:max_idx,3], label='Pend vel t2d [rad/s]')
             axs[1].set_ylabel('Velocity [rad/s]')
             axs[1].legend()
@@ -418,13 +439,14 @@ class FurataIntegrated(Node):
             # Plot torque
             axs[2].plot(time_vec[:max_idx], tau_arr[:max_idx], label='Tau_des / command vel')
             axs[2].plot(time_vec[:max_idx], sum_e_arr[:max_idx], label='Ki term')
-            axs[2].plot(time_vec[:len(motor_state_arr)], motor_state_arr[:len(motor_state_arr)], label = 'Actual Torque')
+            axs[2].plot(time_vec[:max_idx], motor_state_arr[:max_idx], label = 'Actual Torque')
             axs[2].set_xlabel('Time [s]')
             axs[2].set_ylabel('Command')
             axs[2].legend()
             axs[2].grid(True)
 
             # Plot dt
+            axs[3].plot(time_vec[:max_idx], integrating_arr[:max_idx]*np.max(dt_arr), label='Integrating')
             axs[3].plot(time_vec[:max_idx], dt_arr[:max_idx], label='dt [s]')
             axs[3].set_xlabel('Time [s]')
             axs[3].set_ylabel('dt [s]')
