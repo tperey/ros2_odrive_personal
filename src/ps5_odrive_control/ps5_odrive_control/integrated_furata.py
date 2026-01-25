@@ -307,6 +307,19 @@ class FurataIntegrated(Node):
 
         return tau_to_send
 
+    def _gravity_compensation(self, t2):
+
+        # Pend params
+        m = 0.03583 # [kg]
+        g = 9.81 # [m/s^2]
+        l = 2*(77.171 - 27.0)/1000.0 # [m]
+
+        tau_g = m*g*(l/2)*np.tan(self._q_equ[2] - t2)
+
+        return tau_g
+        
+
+
     def control_callback(self):
         # Get state vars from member var
         self._update_state()  # Read MCU
