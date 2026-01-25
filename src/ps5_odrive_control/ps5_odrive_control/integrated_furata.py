@@ -167,7 +167,7 @@ class FurataIntegrated(Node):
         self._ki = np.array([0.0, 2.0, 0.0, 0.0])
         #self._ki = np.array([0.0, 4.0, 0.0, 0.0])
 
-        self._ki = np.array([0.0, 0.0, 0.0, 0.0])
+        self._ki = np.array([0.0, 2.0, 0.0, 0.0])
 
         self.get_logger().info(f"K = {self._lqr_K}")
         self.get_logger().info(f"Ki = {self._ki}")
