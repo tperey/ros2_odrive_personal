@@ -161,12 +161,12 @@ class FurataIntegrated(Node):
         # self._lqr_K = np.array([0.0, 10.0, 0.0, 0.02])
         # self._ki = 170.0
 
-        self._lqr_K = np.array([0.0, 2.0, 0.0, 0.05])
-        self._lqr_K = np.array([0.0, 2.5, 0.0, 0.05])
+        #self._lqr_K = np.array([0.0, 2.0, 0.0, 0.05])
         #self._lqr_K = np.array([0.0, 3.5, 0.0, 0.05])
-        self._ki = np.array([0.0, 2.0, 0.0, 0.0])
+        #self._ki = np.array([0.0, 2.0, 0.0, 0.0])
         #self._ki = np.array([0.0, 4.0, 0.0, 0.0])
 
+        self._lqr_K = np.array([0.0, 2.5, 0.01, 0.05])
         self._ki = np.array([0.0, 2.0, 0.0, 0.0])
 
         self.get_logger().info(f"K = {self._lqr_K}")
