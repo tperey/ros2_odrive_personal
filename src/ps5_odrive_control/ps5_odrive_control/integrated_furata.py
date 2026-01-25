@@ -6,6 +6,7 @@ from inputs import get_gamepad
 from enum import Enum
 import time
 from time import perf_counter
+import matplotlib.pyplot as plt
 
 import odrive
 from odrive.enums import * # Get them all
@@ -23,6 +24,9 @@ TORQUE_CONSTANT = 0.083 # [N-m/A]
 
 SCALE_TORQUE = 0.75 #1.0 #0.25 #0.22 #0.75 #0.4
 MAX_ALLOWABLE_TORQUE = 10.0 # [N/m] for clipping
+
+DEADBAND_POS_INTEGRAL = 0.02 # [rad]
+DEADBAND_VEL_INTEGRAL = 0.3 # [rad/s]
 
 # *** FRICTION STUFF ***
 # Fitted parameters:
@@ -79,7 +83,7 @@ class OControlState(Enum):
     OFF = 0
     ON = 1
 
-V_MAX = 6.0
+V_MAX = 10.0
 
 """ FurataIntegrated: single node which (1) gets pendulum/encoder info
     AND (2) controls Odrive motor """
@@ -107,20 +111,30 @@ class FurataIntegrated(Node):
 
         # Odrive
         self.get_logger().info("!!!STARTING ODrive motors...")
-        self._odrv = get_Odrive_init(Vmax = V_MAX, Kv = 0.333, ConType = ControlMode.TORQUE_CONTROL,
+        self._odrv = get_Odrive_init(Vmax = V_MAX, Kv = 1.0, KvI = 3.0, ConType = ControlMode.TORQUE_CONTROL,
                                      shouldCalibrate = self._doCal, shouldErase = self._doErase, shouldReconfig = self._doRecon)
         self.get_logger().info("Odrive prepped :)")
         self._odrv.clear_errors()  # Clear errors on start
         self._odrv.axis0.pos_estimate = 0.0  # 0 the position on start
         self._odrv.axis0.controller.config.input_mode = InputMode.PASSTHROUGH #InputMode.VEL_RAMP
+        self._odrv.axis0.controller.config.control_mode = ControlMode.TORQUE_CONTROL
         self._control_state = OControlState.OFF  # Start out off
 
         # MCU Reader
         self.mcu_reader = ReaderMCU(
-            port='/dev/ttyACM1',   # change to your MCU port
+            port='/dev/ttyACM3',   # change to your MCU port
             baud=115200,
             logTime = False
         )
+
+        # Read initial pendulum pos to determine what balance point is
+        pend_state = self.mcu_reader.get_pend()
+        t2i = pend_state[2] % (2*np.pi)
+        if (t2i < (np.pi + SMALL_ANGLE)) and (t2i > (np.pi - SMALL_ANGLE)):
+            self._q_equ = np.array([0.0, t2i, 0.0, 0.0])
+            self.get_logger().info(f"```Set initial state to {t2i}")
+        else:
+            self._q_equ = np.array([0.0, np.pi, 0.0, 0.0])
     
         # Controller
         #self._lqr_K = np.array([-0.31622777,  7.47867553, -0.40398849,  0.73223273])  # R = 10
@@ -144,7 +158,11 @@ class FurataIntegrated(Node):
         #self._lqr_K = np.array([0.0, 4.5, 0.0, 0.0])
         #self._lqr_K = np.array([0.0, 5.0, 0.0, 0.0])
 
-        self._lqr_K = np.array([0.0, 8.0, 0.0, 0.15])
+        # self._lqr_K = np.array([0.0, 10.0, 0.0, 0.02])
+        # self._ki = 170.0
+
+        self._lqr_K = np.array([0.0, 2.0, 0.0, 0.05])
+        self._ki = 2.0
 
         self.get_logger().info(f"K = {self._lqr_K}")
         self._q_equ = np.array([0.0, np.pi, 0.0, 0.0])
@@ -160,6 +178,10 @@ class FurataIntegrated(Node):
 
         self._tau_des = 0.0  # [N-m]
 
+        # Error
+        self._sum_e = 0.0
+        self._integral_decay = 1.0 #0.995
+
         # Odrive filtering, and telemetry
         self._fric_flag = 0.0
         self._t1 = None
@@ -170,6 +192,14 @@ class FurataIntegrated(Node):
 
         self.tel_pub = self.create_publisher(TelemetryFurata, 'telemetry_furata', 10)
         #self.ctl_pub = self.create_publisher(Float32MultiArray, 'control_terms', 10)
+
+        # Logging
+        self.q_log = []
+        self.tau_log = []
+        self.dt_log = []
+        self.integrating = []
+        self.sum_e_log = []
+        self.motor_state_log = []
 
     def _filter_callback(self):
         # Publish servo telemetry
@@ -308,14 +338,18 @@ class FurataIntegrated(Node):
                 #     self._tau_des = tau  # For telemetry
 
                 # # Friction (stick-slip) comp
-                self._tau_des = self._friction_compensation(tau_cmd = self._tau_des,
-                                                            vel = t1d,
-                                                            vel_thresh = VEL_KICKSTARTER,
-                                                            tau_thresh = TAU_STARTER,
-                                                            tau_kickstart = TORQUE_KICKSTART,
-                                                            tau_sustain = TORQUE_SUSTAINER)
+                # self._tau_des = self._friction_compensation(tau_cmd = self._tau_des,
+                #                                             vel = t1d,
+                #                                             vel_thresh = VEL_KICKSTARTER,
+                #                                             tau_thresh = TAU_STARTER,
+                #                                             tau_kickstart = TORQUE_KICKSTART,
+                #                                             tau_sustain = TORQUE_SUSTAINER)
                 # Filter noise out of command signal
                 # self._tau_des = self._ctrl_filt_tau.update(self._tau_des, new_dt = self._cur_dt) 
+
+                # Integral action
+                self._sum_e += (t2 - self._q_equ[1])*(self._cur_dt)
+                self._tau_des -= (self._ki)*(self._sum_e)
 
                 # Safe clipping
                 self._tau_des = np.clip(self._tau_des, -MAX_ALLOWABLE_TORQUE, MAX_ALLOWABLE_TORQUE)
@@ -330,6 +364,17 @@ class FurataIntegrated(Node):
 
         else:
             self.get_logger().error("Bad control state")
+        
+        # Logging
+        self.q_log.append((q - self._q_equ))
+        self.tau_log.append(self._tau_des)
+        self.dt_log.append(self._cur_dt)
+        self.sum_e_log.append(-(self._ki)*(self._sum_e))
+        self.motor_state_log.append(self._odrv.axis0.motor.foc.Iq_measured*TORQUE_CONSTANT)
+        if ((np.abs(t2d - self._q_equ[3]) > DEADBAND_VEL_INTEGRAL)):
+            self.integrating.append(1)
+        else:
+            self.integrating.append(0)
     
     def shutdown_odrive(self):
         # Stop motor safely
@@ -340,6 +385,54 @@ class FurataIntegrated(Node):
         request_state(self._odrv.axis0, AxisState.IDLE)
 
         time.sleep(1.0)
+
+        # --- PLOT LOGGED DATA ---
+        if len(self.q_log) > 0:
+            q_arr = np.array(self.q_log)  # shape: [timesteps, 4]
+            tau_arr = np.array(self.tau_log)  # shape: [timesteps]
+            sum_e_arr = np.array(self.sum_e_log)
+            dt_arr = np.array(self.dt_log)
+            motor_state_arr = np.array(self.motor_state_log)
+            integrating_arr = np.array(self.integrating)
+
+            max_idx = np.max(np.array([len(q_arr[:,1]), len(tau_arr), len(sum_e_arr), len(dt_arr)]))
+
+            time_vec = np.arange(q_arr.shape[0]) * self._dt  # approximate time
+
+            fig, axs = plt.subplots(4, 1, figsize=(15, 9), sharex=True)
+
+            # Plot pendulum and motor positions
+            #axs[0].plot(time_vec, q_arr[:,0], label='Motor pos t1 [rad]')
+            axs[0].plot(time_vec[:max_idx], q_arr[:max_idx,1], label='Pend pos t2 [rad]')
+            axs[0].set_ylabel('Position [rad]')
+            axs[0].legend()
+            axs[0].grid(True)
+
+            # Plot velocities
+            #axs[1].plot(time_vec, q_arr[:,2], label='Motor vel t1d [rad/s]')
+            axs[1].plot(time_vec[:max_idx], q_arr[:max_idx,3], label='Pend vel t2d [rad/s]')
+            axs[1].set_ylabel('Velocity [rad/s]')
+            axs[1].legend()
+            axs[1].grid(True)
+
+            # Plot torque
+            axs[2].plot(time_vec[:max_idx], tau_arr[:max_idx], label='Tau_des / command vel')
+            axs[2].plot(time_vec[:max_idx], sum_e_arr[:max_idx], label='Ki term')
+            axs[2].plot(time_vec[:len(motor_state_arr)], motor_state_arr[:len(motor_state_arr)], label = 'Actual Torque')
+            axs[2].set_xlabel('Time [s]')
+            axs[2].set_ylabel('Command')
+            axs[2].legend()
+            axs[2].grid(True)
+
+            # Plot dt
+            axs[3].plot(time_vec[:max_idx], dt_arr[:max_idx], label='dt [s]')
+            axs[3].set_xlabel('Time [s]')
+            axs[3].set_ylabel('dt [s]')
+            axs[3].legend()
+            axs[3].grid(True)
+
+            plt.tight_layout()
+            plt.show()
 
 # ---- MAIN -----
 def main():
