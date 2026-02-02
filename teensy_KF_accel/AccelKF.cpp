@@ -68,32 +68,33 @@ void AccelKF::update(float z) {
         for (int j = 0; j < 3; j++)
             P_new[i][j] = P[i][j] - K[i] * P[0][j];
 
-    for (int i = 0; i < 3; i++)
+    for (int i = 0; i < 3; i++)  // Copy back
         for (int j = 0; j < 3; j++)
             P[i][j] = P_new[i][j];
 }
 
 // Helper: predict covariance
 void AccelKF::_predictCovariance() {
-    float P_temp[3][3] = {0};
+    float P_pred[3][3] = {0.0f};
 
-    // F*P
+    // Compute P_pred = F * P * F^T + Q
+    for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < 3; j++) {
+            P_pred[i][j] = 0.0f;
+            for (int k = 0; k < 3; k++) {
+                for (int l = 0; l < 3; l++) {
+                    P_pred[i][j] += F[i][k] * P[k][l] * F[j][l]; // correct F*P*F^T
+                }
+            }
+            // Add process noise
+            P_pred[i][j] += Q[i][j];
+        }
+    }
+
+    // Copy back to P
     for (int i = 0; i < 3; i++)
         for (int j = 0; j < 3; j++)
-            for (int k = 0; k < 3; k++)
-                P_temp[i][j] += F[i][k] * P[k][j];
-
-    // F*P*F^T
-    float P_pred[3][3] = {0};
-    for (int i = 0; i < 3; i++)
-        for (int j = 0; j < 3; j++)
-            for (int k = 0; k < 3; k++)
-                P_pred[i][j] += P_temp[i][k] * F[j][k];  // F^T multiplication
-
-    // Add process noise
-    for (int i = 0; i < 3; i++)
-        for (int j = 0; j < 3; j++)
-            P[i][j] = P_pred[i][j] + Q[i][j];
+            P[i][j] = P_pred[i][j];
 }
 
 // Getters

@@ -31,13 +31,13 @@ volatile float filtered_speed_f = 0.0;
 volatile long speed_to_transmit = 0;
 
 // ---------- EKF parameters ----------
-const float dt = 0.001;  // sample time in seconds
+float dt = 0.001;  // sample time in seconds
 
 // Process noise covariance
-const float Q[3][3] = {
+float Q[3][3] = {
   {1e-6, 0, 0},
-  {0, 1e-3, 0},
-  {0, 0, 1e-3}
+  {0, 1e-2, 0},
+  {0, 0, 10.0}
 };
 
 // Measurement noise (encoder)
@@ -156,10 +156,13 @@ void sendKalman(long current_pulses) {
   packet[1] = 0x55;
 
   // Copy 32-bit integer into packet (little-endian)
-  memcpy(&packet[2], &speed_to_transmit, 4);
-  memcpy(&packet[6], (const void*) &thisKF.getPosition(), 4);
-  memcpy(&packet[10], &thisKF.getVelocity(), 4);
-  memcpy(&packet[14], &thisKF.getAcceleration(), 4);
+  float pos = thisKF.getPosition();
+  float vel = thisKF.getVelocity();
+  float acc = thisKF.getAcceleration();
+  memcpy(&packet[2], (const void*) &speed_to_transmit, 4);
+  memcpy(&packet[6], &pos, 4);
+  memcpy(&packet[10], &vel, 4);
+  memcpy(&packet[14], &acc, 4);
 
   // Simple checksum = sum of previous bytes modulo 256
   uint8_t checksum = 0;
