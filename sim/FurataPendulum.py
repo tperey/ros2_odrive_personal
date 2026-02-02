@@ -330,7 +330,7 @@ if __name__=="__main__":
     J1yy = (1/12.0)*m1*(L1**2) # !!! ASSUMES this still good enough
     J1zz = J1yy
     
-    m2 = 0.115 # [kg]
+    m2 = 0.03583 #0.115 # [kg]
     b2 = 0.0198*m2 # [N-m/(rad/s)]. Measured and calc'd with ChatGPT
     L2 = 0.1445 # [m]
     l2 = L2/2
@@ -344,7 +344,7 @@ if __name__=="__main__":
     t2d0 = random.uniform(-0.05, 0.05)
     #Q = np.eye(4)
     Q = np.diag([0.1,10.0,0.1,10.0]) # Punish pendulum states more
-    R = np.array([[1.0]]) # Punish effort, its too high
+    R = np.array([[10.0]]) # Punish effort, its too high
     print("Prepping LQR")
     simulateFurata.prep_LQR(Q,R)
     print("~Discretizing LQR~")
