@@ -1,0 +1,21 @@
+TEENSY CODE
+`read_furata_encoder` = basic furata pendulum encoder reader, no Kalman Filter
+`teensy_furata_encoder` = pendulum encoder reader, uses extended Kalman Filter based on UNFORCED dynamics (doesn't account for motor's affects, but rather just gravity physics)
+`teensy_KF_accel` = pendulum encoder reader, uses Kalman Filter assuming constant acceleration btw timesteps (with high uncertainty in that assumption)
+
+SRC/PS5_ODRIVE_CONTROL/PS5_ODRIVE_CONTROL
+`acckf_encoder_node` = reads `teensy_KF_accel`
+`encoder_node` = reads `teensy_furata_encoder`
+`furata_controller` = does the actual LQR control to balance the pendulum
+`integrated_furata` = `encoder_node` and `furata_controller` built into one (I think?)
+`odrive_profiler` = I don't really know, maybe the hanging weight stuff?
+`ps5_controller_node` = read PS5 controller?
+`pst_odrive_node` = move Odrive with PS5 controller?
+`velocity_furata` = velocity loop control to balance the pendulum
+
+SYS_ID
+`friction_sine_waves` = sinusoidal torque input for sys ID, WITH friction comp
+`friction_tester` = not srue
+`torque_sine_waves` = sinusoidal torque input for sys ID of JUST THE MOTOR AND ITS ARM
+`full_sysid_torquewaves` = like `torque_sine_waves` but also reads and includes pendulum encoder info
+`postprocess_sys_id` = do the fit on JUST THE MOTOR AND ITS ARM based on output of `torque_sine_waves`

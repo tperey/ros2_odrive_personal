@@ -32,7 +32,8 @@ setup(
             'odrive_profiler = ps5_odrive_control.odrive_profiler:main',
             'integrated_furata = ps5_odrive_control.integrated_furata:main',
             'velocity_furata = ps5_odrive_control.velocity_furata:main',
-            'acckf_node = ps5_odrive_control.acckf_node:main'
+            'acckf_node = ps5_odrive_control.acckf_encoder_node:main',
+            'full_sysid_torquewaves = ps5_odrive_control.sys_id.full_sysid_torquewaves:main'
         ],
     },
 )
