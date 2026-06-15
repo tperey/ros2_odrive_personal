@@ -44,19 +44,21 @@ class SysIDRun:
 
 # Input object list
 sysid_inputs = [
+    SysIDRun([0.4], [2.0], 100.0),  # Firmly achieves full pendulum rotations
     SysIDRun([TORQUE_AMPLITUDE], [0.1], 4.0),  # Single frequency
     SysIDRun([TORQUE_AMPLITUDE], [0.2], 4.0),
     SysIDRun([TORQUE_AMPLITUDE], [0.5], 10.0),
     SysIDRun([TORQUE_AMPLITUDE], [1.0], 20.0),
     SysIDRun([TORQUE_AMPLITUDE], [2.0], 20.0),
-    SysIDRun([TORQUE_AMPLITUDE], [5.0], 20.0),
+    # SysIDRun([TORQUE_AMPLITUDE], [5.0], 20.0),
     SysIDRun([TORQUE_AMPLITUDE], [10.0], 20.0),
     SysIDRun([TORQUE_AMPLITUDE, TORQUE_AMPLITUDE/2], [2.0, 5.0], 10.0), # Double frequency (original)
-    SysIDRun([TORQUE_AMPLITUDE, TORQUE_AMPLITUDE/2], [0.2, 2.0], 4.0),
+    # SysIDRun([TORQUE_AMPLITUDE, TORQUE_AMPLITUDE/2], [0.2, 2.0], 4.0),
     SysIDRun([TORQUE_AMPLITUDE, TORQUE_AMPLITUDE/2], [0.5, 2.0], 10.0),
     SysIDRun([TORQUE_AMPLITUDE, TORQUE_AMPLITUDE/2], [1.0, 2.0], 10.0),
-    SysIDRun([TORQUE_AMPLITUDE, TORQUE_AMPLITUDE/2], [1.0, 4.0], 10.0),
-    SysIDRun([0.2, 0.05], [0.5, 2.5], 10.0),  # Double frequency (more excitation; trying for 180deg)
+    # SysIDRun([TORQUE_AMPLITUDE, TORQUE_AMPLITUDE/2], [1.0, 4.0], 10.0),
+    SysIDRun([0.15, 0.05], [0.5, 2.5], 10.0),  # Double frequency (more excitation; trying for 180deg)
+    SysIDRun([0.2, 0.075], [1.0, 2.0], 10.0),
 ]
 
 class SysIdState(Enum):
@@ -65,7 +67,7 @@ class SysIdState(Enum):
     START = 1
     MAX = 2
 
-class FullFurataSI(Node):
+class SIFurateOOP(Node):
     def __init__(self):
 
         # TODO: params for calibration
@@ -209,7 +211,7 @@ class FullFurataSI(Node):
         # Save data as pickle
         # smooth_tau_actual = savgol_filter(tau_actual, window_length=51, polyorder=3)
         # self.tel_dict["smooth_tau_actual"] = smooth_tau_actual
-        data_filename = os.path.join(save_dir, f'full_sys_id_data_{timestamp}.pkl')
+        data_filename = os.path.join(save_dir, f'oop_full_sys_id_data_{timestamp}.pkl')
         with open(data_filename, 'wb') as f:
             pickle.dump(self.tel_dict, f)
         print(f"Data saved to: {data_filename}")
@@ -217,7 +219,7 @@ class FullFurataSI(Node):
         # for freq in self.by_freq_dict.keys():
         #     cur_smooth = savgol_filter(self.by_freq_dict[freq]['tau_actual'], window_length=51, polyorder=3)
         #     self.by_freq_dict[freq]['smooth_tau_actual'] = cur_smooth
-        data_filename = os.path.join(save_dir, f'full_sys_id_BYFREQ_{timestamp}.pkl')
+        data_filename = os.path.join(save_dir, f'oop_full_sys_id_BYFREQ_{timestamp}.pkl')
         with open(data_filename, 'wb') as f:
             pickle.dump(self.by_freq_dict, f)
         print(f"By Freq Data saved to: {data_filename}")
@@ -330,7 +332,7 @@ class FullFurataSI(Node):
 # ---- MAIN -----
 def main():
     rclpy.init()
-    node = FullFurataSI()
+    node = SIFurateOOP()
     node.change_motor_state(AxisState.CLOSED_LOOP_CONTROL)
     try:
         rclpy.spin(node)  # Keep node alive and handle callbacks
