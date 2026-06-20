@@ -1,3 +1,7 @@
+SSH INFO
+Via wifi: If your laptop is connected to same WiFi as pi, `ssh tperey-desktop.local` or `ssh tperey@tperey-desktop.local` should work.
+Via Ethernet: When connected via Ethernet, at least to your Macbook, `ssh tperey@192.168.50.2` should work
+
 TEENSY CODE
 `read_furata_encoder` = basic furata pendulum encoder reader, no Kalman Filter
 `teensy_furata_encoder` = pendulum encoder reader, uses extended Kalman Filter based on UNFORCED dynamics (doesn't account for motor's affects, but rather just gravity physics); only outputs VELOCITY
