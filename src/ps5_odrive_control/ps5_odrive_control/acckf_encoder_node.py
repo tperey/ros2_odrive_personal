@@ -7,6 +7,11 @@ from std_msgs.msg import Float32MultiArray
 import serial
 from time import perf_counter
 import time
+import os
+from datetime import datetime
+import pickle
+import matplotlib.pyplot as plt
+from pathlib import Path
 
 RAD_PER_PULSE = (2.0 * 3.1415926535)/2400
 PACKET_SIZE = 19
@@ -68,6 +73,16 @@ class AcckfNode(Node):
         """
         super().__init__('acckf_node')
         self._logTime = logTime
+
+        # Logging
+        self.declare_parameter('doLog', False)
+        self.doLog = self.get_parameter('doLog').value
+        if self.doLog:
+            self.t = []
+            self.pos = []
+            self.vel = []
+            self.acc = []
+            self._first_t = perf_counter()
 
         # Publisher
         self.pub = self.create_publisher(Float32MultiArray, topic, 10)
@@ -155,25 +170,98 @@ class AcckfNode(Node):
                 self.pub.publish(msg)
                 #self.get_logger().info(f"_ deg: {val}")
             
-            # Time logging
-            self._printer += 1
-            now = perf_counter()
-            if self._last_t is None:
-                cur_dt = 0.001  # Default
-            else:
-                cur_dt = now - self._last_t
+                # Time logging
+                self._printer += 1
+                now = perf_counter()
+                if self._last_t is None:
+                    cur_dt = 0.001  # Default
+                    self._first_t = now
+                else:
+                    cur_dt = now - self._last_t
 
-            if (self._printer % 1000 == 0) and (self._logTime):
-                self.get_logger().info(f"cur_dt = {cur_dt}")
-            self._last_t = now
+                if (self._printer % 1000 == 0) and (self._logTime):
+                    self.get_logger().info(f"cur_dt = {cur_dt}")
+                self._last_t = now
+
+                # Data logging
+                now = perf_counter()
+                if self.doLog:
+                    self.t.append(now - self._first_t)
+                    self.pos.append(spd_rad)
+                    self.vel.append(kfval_rad)
+                    self.acc.append(kfspeed_rad)
 
         except serial.SerialException as e:
             self.get_logger().error(f"Serial error: {e}")
+    
+    def save_plot_log(self, save_dir='sys_id_data'):
+        """
+        Save telemetry data and generate plots
+        
+        Args:
+            save_dir: Directory to save data and plots
+        """
+        if self.doLog:
+            # Convert to numpy arrays for plotting
+            t = np.array(self.t)
+            p_pos = np.array(self.pos)
+            p_vel = np.array(self.vel)
+            p_acc = np.array(self.acc)
+
+            tel_dict = {
+                "time": t,
+                "pend_pos": p_pos,
+                "pend_vel": p_vel,
+                "pend_acc": p_acc,
+            }
+
+            # Create directory if it doesn't exist
+            os.makedirs(save_dir, exist_ok=True)
+            
+            # Generate timestamp for filenames
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            
+            # Save data as pickle
+            data_filename = os.path.join(save_dir, f'pend_sys_id_data_{timestamp}.pkl')
+            with open(data_filename, 'wb') as f:
+                pickle.dump(tel_dict, f)
+            print(f"Data saved to: {data_filename}")
+            
+            # ANOTHER PLOT FOR PENDULUM
+            plt.figure()
+            fig, axes = plt.subplots(3,1, figsize=(9,3), sharex = True)
+
+            # Plot 1: Position
+            axes[0].plot(t, p_pos, 'b-', linewidth=1.5, label='Position')
+            axes[0].set_ylabel('Position (rad)', fontsize=12)
+            axes[0].set_xlabel('Time (s)', fontsize=12)
+            axes[0].grid(True, alpha=0.3)
+            axes[0].legend(loc='upper right')
+            axes[0].set_title('System Identification Results', fontsize=14, fontweight='bold')
+            
+            # Plot 2: Velocity
+            axes[1].plot(t, p_vel, 'g-', linewidth=1.5, label='Velocity')
+            axes[1].set_ylabel('Velocity (rad/s)', fontsize=12)
+            axes[1].set_xlabel('Time (s)', fontsize=12)
+            axes[1].grid(True, alpha=0.3)
+            axes[1].legend(loc='upper right')
+
+            # Plot 3: Acceleration
+            axes[2].plot(t, p_acc, 'g-', linewidth=1.5, label='Acceleration')
+            axes[2].set_ylabel('Acceleration (rad/s^2)', fontsize=12)
+            axes[2].set_xlabel('Time (s)', fontsize=12)
+            axes[2].grid(True, alpha=0.3)
+            axes[2].legend(loc='upper right')
+
+            # Save figure
+            plot_filename = os.path.join(save_dir, f'pend_sys_id_plot_{timestamp}.png')
+            plt.savefig(plot_filename, dpi=300, bbox_inches='tight')
+            print(f"Plot saved to: {plot_filename}")
 
 def main(args=None):
     rclpy.init(args=args)
     node = AcckfNode(
-        port='/dev/ttyACM0',   # change to your MCU port
+        port='/dev/ttyACM1',   # change to your MCU port
         baud=115200,
         topic='encoder_furata',
         logTime = False
@@ -183,6 +271,11 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
+        print("Saving and plotting log...")
+        DATA_DIR = Path.home() / "ws_ros2_odrive" / "src" / "ps5_odrive_control" / "ps5_odrive_control" / "sys_id" / "pend_si_data"
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        node.save_plot_log(save_dir=DATA_DIR)
+
         node.destroy_node()
         rclpy.shutdown()
 

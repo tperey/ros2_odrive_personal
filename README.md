@@ -1,3 +1,6 @@
+NOTES
+--Code generally expects Teensy on ACM1 and Odrive on ACM0
+
 SSH INFO
 Via wifi: If your laptop is connected to same WiFi as pi, `ssh tperey-desktop.local` or `ssh tperey@tperey-desktop.local` should work.
 Via Ethernet: When connected via Ethernet, at least to your Macbook, `ssh tperey@192.168.50.2` should work
@@ -23,4 +26,5 @@ SYS_ID
 `torque_sine_waves` = sinusoidal torque input for sys ID of JUST THE MOTOR AND ITS ARM
 `full_sysid_torquewaves` = like `torque_sine_waves` but also reads and includes pendulum encoder info
 `full_sysid_oop` = like `full_sysid_torquewaves` but includes a class to make it easy to do multi-frequency sinusoidal inputs
+`linear_sysid_torque` = LINEAR torque input for sys ID; typically ran with JUST THE MOTOR (no other coponents at all!)
 `postprocess_sys_id` = do the fit on JUST THE MOTOR AND ITS ARM based on output of `torque_sine_waves`

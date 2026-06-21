@@ -34,7 +34,9 @@ setup(
             'velocity_furata = ps5_odrive_control.velocity_furata:main',
             'acckf_node = ps5_odrive_control.acckf_encoder_node:main',
             'full_sysid_torquewaves = ps5_odrive_control.sys_id.full_sysid_torquewaves:main',
-            'full_sysid_oop = ps5_odrive_control.sys_id.full_sysid_oop:main'
+            'full_sysid_oop = ps5_odrive_control.sys_id.full_sysid_oop:main',
+            'linear_sysid_torque = ps5_odrive_control.sys_id.linear_sysid_torque:main',
+            'step_sysid_velocity = ps5_odrive_control.sys_id.step_sysid_velocity:main'
         ],
     },
 )

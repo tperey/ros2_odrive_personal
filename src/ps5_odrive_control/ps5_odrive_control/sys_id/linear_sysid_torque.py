@@ -33,33 +33,18 @@ REV_TO_RAD = 2*np.pi  # Converts rev to radians
 TORQUE_CONSTANT = 0.083 # [N-m/A]
 
 TORQUE_AMPLITUDE = 0.13 # [N-m]
-V_MAX = 10.0
+V_MAX = 40.0
 
-class SysIDRun:
-    def __init__(self, amps = [TORQUE_AMPLITUDE,TORQUE_AMPLITUDE], freqs = [1.0, 1.0], cycles = 1):
-        assert len(amps) == len(freqs), "Must have same number of amps and freqs!"
-        self.amps = amps
-        self.freqs = freqs
+class LinearSIDRun:
+    def __init__(self, amp = TORQUE_AMPLITUDE, ramp_t = 5.0, fall_t = 2.0, cycles = 1):
+        self.amp = amp
+        self.ramp_t = ramp_t
+        self.fall_t = fall_t
         self.cycles = cycles
 
 # Input object list
 sysid_inputs = [
-    SysIDRun([0.11], [0.05], 4.0),  # Get static friciton data
-    SysIDRun([0.4], [2.0], 100.0),  # Firmly achieves full pendulum rotations
-    SysIDRun([TORQUE_AMPLITUDE], [0.1], 4.0),  # Single frequency
-    SysIDRun([TORQUE_AMPLITUDE], [0.2], 4.0),
-    SysIDRun([TORQUE_AMPLITUDE], [0.5], 10.0),
-    SysIDRun([TORQUE_AMPLITUDE], [1.0], 20.0),
-    SysIDRun([TORQUE_AMPLITUDE], [2.0], 20.0),
-    # SysIDRun([TORQUE_AMPLITUDE], [5.0], 20.0),
-    SysIDRun([TORQUE_AMPLITUDE], [10.0], 20.0),
-    SysIDRun([TORQUE_AMPLITUDE, TORQUE_AMPLITUDE/2], [2.0, 5.0], 10.0), # Double frequency (original)
-    # SysIDRun([TORQUE_AMPLITUDE, TORQUE_AMPLITUDE/2], [0.2, 2.0], 4.0),
-    SysIDRun([TORQUE_AMPLITUDE, TORQUE_AMPLITUDE/2], [0.5, 2.0], 10.0),
-    SysIDRun([TORQUE_AMPLITUDE, TORQUE_AMPLITUDE/2], [1.0, 2.0], 10.0),
-    # SysIDRun([TORQUE_AMPLITUDE, TORQUE_AMPLITUDE/2], [1.0, 4.0], 10.0),
-    SysIDRun([0.15, 0.05], [0.5, 2.5], 10.0),  # Double frequency (more excitation; trying for 180deg)
-    SysIDRun([0.2, 0.075], [1.0, 2.0], 10.0),
+    LinearSIDRun(TORQUE_AMPLITUDE, 2.0, 2.0, 100.0)
 ]
 
 class SysIdState(Enum):
@@ -68,11 +53,11 @@ class SysIdState(Enum):
     START = 1
     MAX = 2
 
-class SIFurataOOP(Node):
+class SIFurataLinear(Node):
     def __init__(self):
 
         # TODO: params for calibration
-        super().__init__('full_furata_SI')
+        super().__init__('linear_furata_SI')
 
         # Odrive
         print("!!!STARTING ODrive motors...")
@@ -81,6 +66,7 @@ class SIFurataOOP(Node):
         print("Odrive prepped :)")
         self._odrv.axis0.controller.config.control_mode = ControlMode.TORQUE_CONTROL
         self._odrv.axis0.controller.config.input_mode = InputMode.PASSTHROUGH
+        self._odrv.axis0.controller.config.vel_limit = V_MAX
         self._odrv.axis0.config.motor.current_control_bandwidth = 2000
         self._odrv.clear_errors()  # Clear errors on start
         self._odrv.axis0.pos_estimate = 0.0  # 0 the position on start
@@ -92,6 +78,10 @@ class SIFurataOOP(Node):
         self.t0 = 0.0
         self.phase_start_time = 0.0
         self.cycle_counter = 0
+
+        self.is_rising = True
+        self.toggle_cycle = False
+        self.is_motor_on = True
 
         self._dt = 0.005
         self.ctrl_timer = self.create_timer(self._dt, self.cyclic_control)
@@ -110,10 +100,11 @@ class SIFurataOOP(Node):
             "pend_acc": [],
             "tau_actual": [],
             "tau_cmd": [],
+            "is_motor_on": [],
         }
 
-        # TODO: avoid overwriting by_freq entries when front frequencies repeat
-        self.by_freq_dict = {sysidrun.freqs[0]: {"time": [], "pos_actual": [], "vel_actual": [], "pend_pos": [], "pend_vel": [], "pend_acc": [], "tau_actual": [], "tau_cmd": []} 
+        # TODO: avoid overwriting by_freq entries when front amplitudes repeat
+        self.by_freq_dict = {sysidrun.amp: {"time": [], "pos_actual": [], "vel_actual": [], "pend_pos": [], "pend_vel": [], "pend_acc": [], "tau_actual": [], "tau_cmd": []} 
                  for sysidrun in self.input_list}
     
     def encoder_callback(self, msg):
@@ -141,14 +132,30 @@ class SIFurataOOP(Node):
         # Handle profile 
         cur_sysidrun = self.input_list[self.freq_counter]
         tau_cmd = 0.0
-        for amp, freq in zip(cur_sysidrun.amps, cur_sysidrun.freqs):
-            tau_cmd += amp * np.sin(2*np.pi*freq*phase_t)
 
-        # Update odrive
-        self._odrv.axis0.controller.input_torque = -tau_cmd
+        if self.is_rising:
+            # Set torque
+            tau_cmd =(cur_sysidrun.amp/cur_sysidrun.ramp_t)*phase_t
+            self._odrv.axis0.controller.input_torque = -tau_cmd
+            
+            # Check for fall
+            if phase_t >= cur_sysidrun.ramp_t:
+                self.is_rising = False
+                self.phase_start_time = perf_counter()
+                self.get_logger().info("Switching to falling")
+                self.change_motor_state()  # Just cut power, and wait for fall time
+                self.is_motor_on = False
+        else:
+            # Check for cycle end
+            if (phase_t >= cur_sysidrun.fall_t) or (cur_sysidrun.fall_t == 0.0):
+                self.is_rising = True
+                self.toggle_cycle = True
+                self.phase_start_time = perf_counter()
+            
+            tau_cmd = 0.0
 
         # Log update
-        freq = cur_sysidrun.freqs[0]
+        freq = cur_sysidrun.amp
         (self.tel_dict["time"]).append(cur_t)
         (self.tel_dict["pos_actual"]).append(-1*((self._odrv.axis0.pos_estimate)*REV_TO_RAD))
         (self.tel_dict["vel_actual"]).append(-1*((self._odrv.axis0.vel_estimate)*REV_TO_RAD))
@@ -157,6 +164,7 @@ class SIFurataOOP(Node):
         (self.tel_dict["pend_acc"]).append(self.cur_pend_state[2])
         (self.tel_dict["tau_actual"]).append(((self._odrv.axis0.motor.foc.Iq_measured)*TORQUE_CONSTANT))
         (self.tel_dict["tau_cmd"]).append(tau_cmd)
+        (self.tel_dict["is_motor_on"]).append(self.is_motor_on)
 
         (self.by_freq_dict[freq]["time"]).append(cur_t)
         (self.by_freq_dict[freq]["pos_actual"]).append(-1 * (self._odrv.axis0.pos_estimate*REV_TO_RAD))
@@ -168,12 +176,15 @@ class SIFurataOOP(Node):
         (self.by_freq_dict[freq]["tau_cmd"]).append(tau_cmd)
 
         # Handle cycle switching
-        cycle_state = phase_t * freq
-        if (cycle_state - self.cycle_counter) > 1.0: # Cycle complete
+        if self.toggle_cycle: # Cycle complete
             self.cycle_counter += 1
+            self.toggle_cycle = False
+            self.phase_start_time = perf_counter()
+            self.change_motor_state(AxisState.CLOSED_LOOP_CONTROL)
+            self.is_motor_on = True
             print(f"Updating cycle counter to {self.cycle_counter}")
 
-        # Handle frequency switching
+        # Handle run switching
         if self.cycle_counter >= (cur_sysidrun.cycles):
             # Stop motor for switch
             self._odrv.axis0.controller.input_torque = 0.0
@@ -184,7 +195,7 @@ class SIFurataOOP(Node):
             if self.freq_counter >= (len(self.input_list)):
                 raise RuntimeError("Done with freq_list")
             
-            print(f"~~~SWITCHING FREQS to {self.input_list[self.freq_counter].freqs}")
+            print(f"~~~SWITCHING to {self.input_list[self.freq_counter]}")
 
             # 0 everyting
             self._odrv.axis0.pos_estimate = 0.0
@@ -217,7 +228,7 @@ class SIFurataOOP(Node):
         # Save data as pickle
         # smooth_tau_actual = savgol_filter(tau_actual, window_length=51, polyorder=3)
         # self.tel_dict["smooth_tau_actual"] = smooth_tau_actual
-        data_filename = os.path.join(save_dir, f'hr_oop_full_sys_id_data_{timestamp}.pkl')
+        data_filename = os.path.join(save_dir, f'hr_linear_sys_id_data_{timestamp}.pkl')
         with open(data_filename, 'wb') as f:
             pickle.dump(self.tel_dict, f)
         print(f"Data saved to: {data_filename}")
@@ -225,7 +236,7 @@ class SIFurataOOP(Node):
         # for freq in self.by_freq_dict.keys():
         #     cur_smooth = savgol_filter(self.by_freq_dict[freq]['tau_actual'], window_length=51, polyorder=3)
         #     self.by_freq_dict[freq]['smooth_tau_actual'] = cur_smooth
-        data_filename = os.path.join(save_dir, f'hr_oop_full_sys_id_BYFREQ_{timestamp}.pkl')
+        data_filename = os.path.join(save_dir, f'hr_linear_sys_id_BYFREQ_{timestamp}.pkl')
         with open(data_filename, 'wb') as f:
             pickle.dump(self.by_freq_dict, f)
         print(f"By Freq Data saved to: {data_filename}")
@@ -263,7 +274,7 @@ class SIFurataOOP(Node):
         axes[2].legend(loc='upper right')
         
         # Save figure
-        plot_filename = os.path.join(save_dir, f'hr_fullsi_motor_plot_{timestamp}.png')
+        plot_filename = os.path.join(save_dir, f'hr_linearsi_motor_plot_{timestamp}.png')
         plt.savefig(plot_filename, dpi=300, bbox_inches='tight')
         print(f"Plot saved to: {plot_filename}")
         
@@ -290,7 +301,7 @@ class SIFurataOOP(Node):
         plt.tight_layout()
         
         # Save figure
-        plot_filename = os.path.join(save_dir, f'hr_fullsi_motorPhase_plot_{timestamp}.png')
+        plot_filename = os.path.join(save_dir, f'hr_linearsi_motorPhase_plot_{timestamp}.png')
         plt.savefig(plot_filename, dpi=300, bbox_inches='tight')
         print(f"Plot saved to: {plot_filename}")
         
@@ -324,7 +335,7 @@ class SIFurataOOP(Node):
         axes[2].legend(loc='upper right')
 
         # Save figure
-        plot_filename = os.path.join(save_dir, f'hr_fullsi_Pend_plot_{timestamp}.png')
+        plot_filename = os.path.join(save_dir, f'hr_linearsi_Pend_plot_{timestamp}.png')
         plt.savefig(plot_filename, dpi=300, bbox_inches='tight')
         print(f"Plot saved to: {plot_filename}")
         
@@ -345,7 +356,7 @@ class SIFurataOOP(Node):
 # ---- MAIN -----
 def main():
     rclpy.init()
-    node = SIFurataOOP()
+    node = SIFurataLinear()
     node.change_motor_state(AxisState.CLOSED_LOOP_CONTROL)
     try:
         rclpy.spin(node)  # Keep node alive and handle callbacks
@@ -356,7 +367,7 @@ def main():
         node.shutdown_odrive() 
 
         print("Saving and plotting log...")
-        DATA_DIR = Path.home() / "ws_ros2_odrive" / "src" / "ps5_odrive_control" / "ps5_odrive_control" / "sys_id" / "full_si_data"
+        DATA_DIR = Path.home() / "ws_ros2_odrive" / "src" / "ps5_odrive_control" / "ps5_odrive_control" / "sys_id" / "linear_si_data"
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         node.save_plot_log(save_dir=DATA_DIR)
         
