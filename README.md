@@ -1,5 +1,20 @@
 NOTES
 --Code generally expects Teensy on ACM1 and Odrive on ACM0
+--Cogging
+1. Tried using velocity info, assuming its constant (no acceleration). But problems
+----At low velocity setpoints, acceleration is absolutely not negligible.
+----At high velocity setpoints, dynamics filter out cogging in the position output (can't identify it from the data), AND/OR (cogging in space)*(velcoity) > Nyquist (can't detect the spatial frequency in the sampled time). 
+2. Tried bringin in accel info, but other challenges
+----You have to numerically DIFFERENTIATE to bring in acceleration, so its noisy. Hard to know how much to filter velocity, acceleration, and torque (if at all)
+----Again, at high speeds, can't resolve the cogging component
+----But at low speeds, acceleration is caused by (and therefore included in) the COGGING, not the actual motor torque. So the linear regressino says there's is basically no inertia
+----So, estiamte is no better or worse
+
+***Next steps
+----Probably want to use high velocity (torque ramp) data to fit friction, inertia (though cogging will still show up, likely as offset [average of the nonzero mean high freq signal])
+----Then, go back to cogging - most likely using POSITION ramp, and/or built-in Odrive anticogging procedure
+----And/or get a new motor! And/or include some kind of downstream torque sensing!
+
 
 SSH INFO
 Via wifi: If your laptop is connected to same WiFi as pi, `ssh tperey-desktop.local` or `ssh tperey@tperey-desktop.local` should work.
