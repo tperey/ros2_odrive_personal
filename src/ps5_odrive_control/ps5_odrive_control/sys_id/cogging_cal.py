@@ -34,6 +34,7 @@ TORQUE_CONSTANT = 0.083 # [N-m/A]
 
 VEL_AMPLITUDE = 0.5 # [rev/s]
 V_MAX = 40.0
+MAP_LENGTH = 1024
 
 class SysIdState(Enum):
     # For preventing crazy motions when pendulum in weird states
@@ -68,18 +69,14 @@ class SICoggingComp(Node):
         
         # Logging
         self._dt = 0.002
+        self.t0 = 0.0
         self.ctrl_timer = self.create_timer(self._dt, self.cyclic_log)
 
         self.tel_dict = {
             "time": [],
             "pos_actual": [],
             "vel_actual": [],
-            "pend_pos": [],
-            "pend_vel": [],
-            "pend_acc": [],
             "tau_actual": [],
-            "tau_cmd": [],
-            "is_motor_on": [],
         }
 
     def change_motor_state(self, state_to_request = AxisState.IDLE):
@@ -99,7 +96,12 @@ class SICoggingComp(Node):
         (self.tel_dict["pos_actual"]).append(-1*((self._odrv.axis0.pos_estimate)*REV_TO_RAD))
         (self.tel_dict["vel_actual"]).append(-1*((self._odrv.axis0.vel_estimate)*REV_TO_RAD))
         (self.tel_dict["tau_actual"]).append(((self._odrv.axis0.motor.foc.Iq_measured)*TORQUE_CONSTANT))
-        (self.tel_dict["is_motor_on"]).append(self.is_motor_on)
+
+        # Detect completion
+        if self._odrv.axis0.current_state == AxisState.IDLE:
+            self.ctrl_timer.cancel()
+            self.get_logger().info("Cal complete!")
+            raise KeyboardInterrupt
 
     def save_plot_log(self, save_dir='sys_id_data'):
         """
@@ -108,28 +110,11 @@ class SICoggingComp(Node):
         Args:
             save_dir: Directory to save data and plots
         """
-        # Save the cogging map
-        self._odrv.axis0.controller.config.pos_gain = 20.0  # Restore gains
-        self._odrv.axis0.controller.config.vel_gain = 0.333
-        self._odrv.save_configuration()
-
-        # Get the cogging map
-        pulse = 0
-        cogging_map = []
-        while True:
-            try:
-                cogging_map.append(self._odrv.axis0.config.anticogging.get_map(pulse))
-                pulse += 1
-            except Exception as e:
-                self.get_logger().info(f"Cogging map length was {pulse}: {e}")
-                break
-
         # Convert to numpy arrays for plotting
         t = np.array(self.tel_dict['time'])
         pos = np.array(self.tel_dict['pos_actual'])
         vel = np.array(self.tel_dict['vel_actual'])
         tau_actual = np.array(self.tel_dict['tau_actual'])
-        cogging_map = np.array(cogging_map)
 
         # Create directory if it doesn't exist
         os.makedirs(save_dir, exist_ok=True)
@@ -176,13 +161,28 @@ class SICoggingComp(Node):
         # Show plot
         plt.show()
 
+    def save_cogging_map(self, save_dir='sys_id_data'):
+        # Get the cogging map
+        cogging_map = []
+        for i in range(1024):
+            cogging_map.append(self._odrv.axis0.config.anticogging.get_map(i))
+        self.get_logger().info(f"Cogging map polled")
+        cogging_map = np.array(cogging_map)
+
+        # Save data as pickle
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        data_filename = os.path.join(save_dir, f'cogging_map_{timestamp}.pkl')
+        with open(data_filename, 'wb') as f:
+            pickle.dump(cogging_map, f)
+        print(f"Data saved to: {data_filename}")
+
         # ANOTHER PLOT FOR COGGING MAP
         plt.figure()
         fig, axes = plt.subplots(1, 1, figsize=(12, 6), sharex = True)
 
         axes.plot(cogging_map, 'b-', linewidth=1.5, label='Cogging Map')
         axes.set_xlabel('Index', fontsize = 12)
-        axes.set_ylabel('Torque (N-m?)', fonsize = 12)
+        axes.set_ylabel('Torque (N-m)', fontsize = 12)
         axes.grid(True, alpha=0.3)
         axes.legend(loc='upper right')
         
@@ -195,17 +195,42 @@ class SICoggingComp(Node):
         
         # Show plot
         plt.show()
+
+        # Show the FFT
+        plt.figure()
+
+        # FFT
+        N = len(cogging_map)
+        dx = 1/N
+        fft_vals = np.fft.rfft(cogging_map)
+        freqs = np.fft.rfftfreq(len(cogging_map), d=dx)
+        magnitude = np.abs(fft_vals)
+
+        # Plot
+        plt.plot(freqs, magnitude)
+        plt.xlabel('Frequency (Hz, i.e. cycles/rev)')
+        plt.ylabel('Magnitude')
+        plt.grid(True)
+
+        plt.show()
+        plot_filename = os.path.join(save_dir, f'cogging_map_FFT_{timestamp}.png')
+        plt.savefig(plot_filename, dpi=300, bbox_inches='tight')
+        print(f"Plot saved to: {plot_filename}")
         
     
     def shutdown_odrive(self):
         # Stop motor safely
         self.get_logger().info("Stopping ODrive motors...")
 
-        self._odrv.axis0.controller.input_torque = 0.0
-
         request_state(self._odrv.axis0, AxisState.IDLE)
 
         time.sleep(1.0)
+
+        # Save the cogging map
+        self._odrv.axis0.controller.config.pos_gain = 20.0  # Restore gains
+        self._odrv.axis0.controller.config.vel_gain = 0.333
+        self.get_logger().info("Reset gains, saving config")
+        self._odrv.save_configuration()
 
 # ---- MAIN -----
 def main():
@@ -215,18 +240,21 @@ def main():
     try:
         rclpy.spin(node)  # Keep node alive and handle callbacks
     except KeyboardInterrupt:
-        node.get_logger().info("Shutting down Odrive in FurataController node...")
+        node.get_logger().info("Shutting down node...")
     finally:
-        print("Stopping motor...")
-        node.shutdown_odrive() 
+        rclpy.shutdown()  # Interferes with accessing Odrive
+    
+    # Save
+    print("Saving and plotting log...")
+    DATA_DIR = Path.home() / "ws_ros2_odrive" / "src" / "ps5_odrive_control" / "ps5_odrive_control" / "sys_id" / "cogging_comp_onboard"
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    node.save_plot_log(save_dir=DATA_DIR)
+    node.save_cogging_map(save_dir=DATA_DIR)
 
-        print("Saving and plotting log...")
-        DATA_DIR = Path.home() / "ws_ros2_odrive" / "src" / "ps5_odrive_control" / "ps5_odrive_control" / "sys_id" / "cogging_comp_onboard"
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
-        node.save_plot_log(save_dir=DATA_DIR)
+    print("Stopping motor...")
+    node.shutdown_odrive() 
         
-        node.destroy_node()
-        rclpy.shutdown()
+    node.destroy_node()
 
 if __name__ == "__main__":
     main()
