@@ -9,11 +9,7 @@ NOTES
 ----Again, at high speeds, can't resolve the cogging component
 ----But at low speeds, acceleration is caused by (and therefore included in) the COGGING, not the actual motor torque. So the linear regressino says there's is basically no inertia
 ----So, estiamte is no better or worse
-
-***Next steps
-----Probably want to use high velocity (torque ramp) data to fit friction, inertia (though cogging will still show up, likely as offset [average of the nonzero mean high freq signal])
-----Then, go back to cogging - most likely using POSITION ramp, and/or built-in Odrive anticogging procedure
-----And/or get a new motor! And/or include some kind of downstream torque sensing!
+3. I used the onboard cogging. Seemed pretty good, but should evaluate
 
 
 SSH INFO
@@ -53,3 +49,5 @@ SYS_ID
 `full_sysid_oop` = like `full_sysid_torquewaves` but includes a class to make it easy to do multi-frequency sinusoidal inputs
 `linear_sysid_torque` = LINEAR torque input for sys ID; typically ran with JUST THE MOTOR (no other coponents at all!)
 `postprocess_sys_id` = do the fit on JUST THE MOTOR AND ITS ARM based on output of `torque_sine_waves`
+`linear_sysid_position` = LINEAR position input for sys ID (i.e. cogging comp); typically ran with JUST THE MOTOR
+`cogging_cal` = runs and logs onboard cogging calibration
