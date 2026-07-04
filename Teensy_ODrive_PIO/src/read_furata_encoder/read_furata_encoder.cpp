@@ -1,6 +1,12 @@
 #include <Encoder.h> // Include necessary libraries
 #include <TimerOne.h>
+#include <Arduino.h>
 
+// Function prototypes
+void sendPacket(void);
+void encoderISR(void);
+
+// Constants
 #define TRANSMIT_PERIOD 1000 // [us]. 1000 is 1 KHz
 #define BAUD_RATE 115200
 
@@ -40,10 +46,6 @@ void setup() {
   // Trigger transmission with a timer
   Timer1.initialize(TRANSMIT_PERIOD);
   Timer1.attachInterrupt(encoderISR);
-
-}
-
-void compute_alpha() {
 
 }
 
