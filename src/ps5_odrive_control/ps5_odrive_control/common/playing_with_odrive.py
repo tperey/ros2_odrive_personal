@@ -12,7 +12,7 @@ LEAD_SCREW_PITCH = 5.0 # mm/rev of lead screw
 # 15 rev/sec = Full travel in 1 sec
 
 """ ODRIVE INIT FUNCS """
-def get_Odrive_init(Kp = 20.0, Kv = 0.167, KvI = 0.333, Vmax =4.0, shouldErase = True, shouldReconfig = True, shouldCalibrate = True, ConType = ControlMode.POSITION_CONTROL, InType = InputMode.PASSTHROUGH):
+def get_Odrive_init(Kp = 20.0, Kv = 0.167, KvI = 0.333, Vmax =4.0, shouldErase = True, shouldReconfig = True, shouldCalibrate = True, ConType = ControlMode.TORQUE_CONTROL, InType = InputMode.PASSTHROUGH):
     """
     config_Odrive_init
 
@@ -90,6 +90,7 @@ def get_Odrive_init(Kp = 20.0, Kv = 0.167, KvI = 0.333, Vmax =4.0, shouldErase =
         odrv.axis0.controller.config.pos_gain = Kp
         odrv.axis0.controller.config.vel_gain = Kv
         odrv.axis0.controller.config.vel_integrator_gain = KvI
+        odrv.axis0.config.motor.current_control_bandwidth = 2000
 
         # Comms and Encoders
         odrv.can.config.protocol = Protocol.NONE
@@ -97,6 +98,15 @@ def get_Odrive_init(Kp = 20.0, Kv = 0.167, KvI = 0.333, Vmax =4.0, shouldErase =
         odrv.axis0.config.load_encoder = EncoderId.ONBOARD_ENCODER0
         odrv.axis0.config.commutation_encoder = EncoderId.ONBOARD_ENCODER0
         odrv.config.enable_uart_a = False
+
+        # CAN SETUP
+        odrv.axis0.config.can.node_id = 0
+        odrv.axis0.config.can.baud_rate = 1000000
+        odrv.axis0.config.can.encoder_msg_rate_ms = 1
+        odrv.axis0.config.can.iq_msg_rate_ms = 1
+
+        # Cogging
+        odrv.axis0.config.anticogging.enabled = True
 
         print("----Done reconfiguring!!!!")
         print("----Saving new config...")
@@ -261,7 +271,9 @@ def get_Odrive_init(Kp = 20.0, Kv = 0.167, KvI = 0.333, Vmax =4.0, shouldErase =
 """ TEST FUNCS """
 # Simple sine example WITH MY FUNCTIONS
 def simple_sinusoid():
-    odrv0 = get_Odrive_init(Vmax = 4.0)
+    #odrv0 = get_Odrive_init(Vmax = 4.0)
+    odrv0 = get_Odrive_init(Vmax = V_MAX, Kv = 0.333, ConType = ControlMode.TORQUE_CONTROL,
+                                     shouldCalibrate = False, shouldErase = False, shouldReconfig = True)
 
     while True:
         try:
