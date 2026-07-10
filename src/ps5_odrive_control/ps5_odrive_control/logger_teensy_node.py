@@ -30,13 +30,24 @@ class LoggerNode(Node):
 
         # Open serial port to Teensy
         self._buf = bytearray()
+        self._started = False
         try:
             self.ser = serial.Serial(port, baud, timeout=0.1)
             self.get_logger().info(f"Connected to MCU on {port} at {baud} baud")
 
             # Signal start
             time.sleep(0.2)  # Optional: wait for Teensy reset on serial open
-            self.ser.write(b'\x01') # Ready byte
+            while not self._started:
+                if self.ser.in_waiting:
+                    cur_byte = self.ser.read(1)  # Just look at a byte
+
+                    if cur_byte == b'\x10':
+                        self._started = True
+                        self.ser.reset_input_buffer()
+                else:
+                    self.ser.write(b'\x01') # Keep sending ready byte until get ack
+                    time.sleep(0.2)
+                    self.get_logger().info("Waiting for TEENSY ack...")
         except serial.SerialException as e:
             self.get_logger().error(f"Failed to MCU to MCU: {e}")
             raise e

@@ -102,6 +102,7 @@ bool setupCan() {
 }
 
 // GENERAL
+bool started = false;
 void initialize_singleODCW(uint8_t n_drives_, uint32_t baud_rate_) {
 
   /* SET GLOBAL VARS */
@@ -122,12 +123,24 @@ void initialize_singleODCW(uint8_t n_drives_, uint32_t baud_rate_) {
   /* SETUP COMMS*/
   Serial.begin(115200);
 
-  // Wait for up to 3 seconds for the serial port to be opened on the PC side.
-  // If no PC connects, continue anyway.
-  for (int i = 0; i < 30 && !Serial; ++i) {
-    delay(100);
+  // Wait for startup msg from PC. Expect 0x01
+  while (!started) {
+    if (Serial.available() > 0) {
+      uint8_t byte_in = Serial.read();
+
+      if (byte_in == 0x01) {
+        started = true;
+        Serial.write(0x10);
+      }
+    }
   }
-  delay(200);
+
+  // // Wait for up to 3 seconds for the serial port to be opened on the PC side.
+  // // If no PC connects, continue anyway.
+  // for (int i = 0; i < 30 && !Serial; ++i) {
+  //   delay(100);
+  // }
+  // delay(200);
 
 
   Serial.println("~~~~~~~~~~Starting ODriveCAN~~~~~~~~~~");
