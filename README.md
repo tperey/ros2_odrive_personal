@@ -62,4 +62,7 @@ SYS_ID
 `linear_sysid_torque` = LINEAR torque input for sys ID; typically ran with JUST THE MOTOR (no other coponents at all!)
 `postprocess_sys_id` = do the fit on JUST THE MOTOR AND ITS ARM based on output of `torque_sine_waves`
 `linear_sysid_position` = LINEAR position input for sys ID (i.e. cogging comp); typically ran with JUST THE MOTOR
-`cogging_cal` = runs and logs onboard cogging calibration
+`cogging_cal` = runs and logs onboard cogging 
+`logger_teensy_node` = simply logs messages from Teensy
+--Currently set just for one standalone motor.
+--So, Expect [0xAA] [0x55] [t] [pos] [vel] [iq_set] [iq_measured] [tau_target] [tau_actual] [cmd] [checksum]

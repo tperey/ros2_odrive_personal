@@ -14,7 +14,8 @@ find_package(rosidl_default_generators REQUIRED)
 
 # Generate messages
 rosidl_generate_interfaces(${PROJECT_NAME}
-  "msgs/TelemetryFurata.msg"
+  "msg/TelemetryFurata.msg",
+  "msg/MotorSingleTelemetry.msg"
 )
 
 if(BUILD_TESTING)

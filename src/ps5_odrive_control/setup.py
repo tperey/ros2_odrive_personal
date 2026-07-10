@@ -38,7 +38,8 @@ setup(
             'linear_sysid_torque = ps5_odrive_control.sys_id.linear_sysid_torque:main',
             'step_sysid_velocity = ps5_odrive_control.sys_id.step_sysid_velocity:main',
             'linear_sysid_position = ps5_odrive_control.sys_id.linear_sysid_position:main',
-            'cogging_cal = ps5_odrive_control.sys_id.cogging_cal:main'
+            'cogging_cal = ps5_odrive_control.sys_id.cogging_cal:main',
+            'logger_teensy_node = ps5_odrive_control.logger_teensy_node:main'
         ],
     },
 )

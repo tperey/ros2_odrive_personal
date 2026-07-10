@@ -8,7 +8,7 @@ find_package(msgs_furata REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
-  "msg/Encoder.msg"
+  "msg/Encoder.msg",
 )
 
 ament_python_install_package(${PROJECT_NAME})
