@@ -101,7 +101,7 @@ def get_Odrive_init(Kp = 20.0, Kv = 0.167, KvI = 0.333, Vmax =4.0, shouldErase =
 
         # CAN SETUP
         odrv.axis0.config.can.node_id = 0
-        odrv.axis0.config.can.baud_rate = 1000000
+        odrv.can.config.baud_rate = 1000000
         odrv.axis0.config.can.encoder_msg_rate_ms = 1
         odrv.axis0.config.can.iq_msg_rate_ms = 1
 
@@ -272,8 +272,9 @@ def get_Odrive_init(Kp = 20.0, Kv = 0.167, KvI = 0.333, Vmax =4.0, shouldErase =
 # Simple sine example WITH MY FUNCTIONS
 def simple_sinusoid():
     #odrv0 = get_Odrive_init(Vmax = 4.0)
-    odrv0 = get_Odrive_init(Vmax = V_MAX, Kv = 0.333, ConType = ControlMode.TORQUE_CONTROL,
-                                     shouldCalibrate = False, shouldErase = False, shouldReconfig = True)
+    odrv0 = get_Odrive_init(Vmax = 10.0, Kp = 20.0, Kv = 0.333, ConType = ControlMode.POSITION_CONTROL,
+                                     shouldCalibrate = True, shouldErase = True, shouldReconfig = True)
+    odrv0.axis0.pos_estimate = odrv0.onboard_encoder0.raw  # Use absolute reference
 
     while True:
         try:
