@@ -248,19 +248,66 @@ void sendTelemetry_singleODCW(float cmd) {
 
 }
 
+/* SAFE SHUTDOWN */
+
+void stop_motor_single() {
+  while (odrv0_user_data.last_heartbeat.Axis_State != ODriveAxisState::AXIS_STATE_IDLE) {
+    odrv0.clearErrors();
+    delay(1);
+    odrv0.setState(ODriveAxisState::AXIS_STATE_IDLE);
+
+    // Pump events for 150ms. This delay is needed for two reasons;
+    // 1. If there is an error condition, such as missing DC power, the ODrive might
+    //    briefly attempt to enter CLOSED_LOOP_CONTROL state, so we can't rely
+    //    on the first heartbeat response, so we want to receive at least two
+    //    heartbeats (100ms default interval).
+    // 2. If the bus is congested, the setState command won't get through
+    //    immediately but can be delayed.
+    for (int i = 0; i < 15; ++i) {
+      delay(10);
+      pumpEvents(can_intf);
+    }
+  }
+}
+
+// Called cyclically to stop control if logger signals end
+bool check_for_shutdown_msg() {
+  static String incoming = "";
+  bool status_ok = true;
+
+  // Check for "stop"
+  while (Serial.available() > 0) {
+    char c = Serial.read();
+    if (c == '\n') {
+      incoming.trim();  // strips \r and any whitespace
+      if (incoming == "stop") {
+        // handle stop condition
+        status_ok = false;
+        stop_motor_single();
+      }
+      incoming = "";  // reset for next run. Probably doesn't really matter
+    } else {
+      incoming += c;
+    }
+  }
+
+  return status_ok;
+}
+
 /* BASIC TRAJECTORIES, SINGLE MOTOR */
 
-void simplesine_singleODCW() {
-  // pumpEvents(can_intf); // This is required on some platforms to handle incoming feedback CAN messages
-  //                       // Note that on MCP2515-based platforms, this will delay for a fixed 10ms.
-  //                       //
-  //                       // This has been found to reduce the number of dropped messages, however it can be removed
-  //                       // for applications requiring loop times over 100Hz.
+bool simplesine_pos_singleODCW() {
+
+  // Set control mode on first call
+  static bool is_first = true;
+  if (is_first) {
+    odrv0.setControllerMode(ODriveControlMode::CONTROL_MODE_POSITION_CONTROL, ODriveInputMode::INPUT_MODE_PASSTHROUGH);
+    is_first = false;
+  }
 
   float SINE_PERIOD = 2.0f; // Period of the position command sine wave in seconds
 
-  float t = 0.001 * millis();
-  
+  float t = 0.001 * millis();  
   float phase = t * (TWO_PI / SINE_PERIOD);
 
   odrv0.setPosition(
@@ -270,4 +317,32 @@ void simplesine_singleODCW() {
 
   // print telemtry
   sendTelemetry_singleODCW(sin(phase));
+
+  // Always check for shutdown
+  return check_for_shutdown_msg();
+}
+
+// Basic torque sinewave
+bool simplesine_tau_singleODCW() {
+
+  // Set control mode on first call
+  static bool is_first = true;
+  if (is_first) {
+    odrv0.setControllerMode(ODriveControlMode::CONTROL_MODE_TORQUE_CONTROL, ODriveInputMode::INPUT_MODE_PASSTHROUGH);
+    is_first = false;
+  }
+
+  float AMP = 0.05;  // [N-m]
+  float SINE_PERIOD = 2.0f; // Period of the position command sine wave in seconds
+
+  float t = 0.001 * millis();
+  float phase = t * (TWO_PI / SINE_PERIOD);
+
+  odrv0.setTorque(AMP*sin(phase));
+
+  // print telemtry
+  sendTelemetry_singleODCW(AMP*sin(phase));
+
+  // Always check for shutdown
+  return check_for_shutdown_msg();
 }

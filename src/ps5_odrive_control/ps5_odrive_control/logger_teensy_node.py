@@ -25,6 +25,8 @@ PACKET_SIZE = 35  # SINGLE_TEL_PCKT_SIZE
 
 BUF_SIZE_WARNING = 525  # Behind by 3x cycles of 5 packets (of 35 bits)
 
+STOP_MSG = b'stop\n'
+
 
 class LoggerNode(Node):
     def __init__(self,
@@ -114,7 +116,7 @@ class LoggerNode(Node):
                     with self.lock:
                         self._read_buf.extend(data)
 
-                        if len(self._read_buf) > 500:
+                        if len(self._read_buf) > BUF_SIZE_WARNING:
                             self.get_logger().warn(f"WARNING: read_buf has {len(self._read_buf)} bytes")
             except serial.SerialException as e:
                 self.get_logger().error(f"Serial error: {e}")
@@ -310,6 +312,11 @@ class LoggerNode(Node):
         
         # Show plot
         plt.show()
+    
+
+    """ SAFE SHUTDOWN """
+    def stop_motor_control(self):
+        self.ser.write(STOP_MSG)
 
 
 def main(args=None):
@@ -327,6 +334,10 @@ def main(args=None):
         dts = np.diff(np.array(times))
         print(f"FINAL MEAN LOG DT (ms) = {np.mean(dts)}")
     finally:
+        # Stop motor via Teensy msg
+        node.stop_motor_control()
+
+        # Save log
         print("Saving and plotting log...")
         DATA_DIR = Path.home() / "ws_ros2_odrive" / "src" / "ps5_odrive_control" / "ps5_odrive_control" / "logs"
         DATA_DIR.mkdir(parents=True, exist_ok=True)

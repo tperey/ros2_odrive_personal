@@ -18,6 +18,10 @@
 
 /* PUBLIC FUNCTIONS */
 void initialize_singleODCW(uint8_t n_drives_ = 1, uint32_t baud_rate_ = DEFAULT_BAUD);
-void simplesine_singleODCW();
+bool simplesine_pos_singleODCW();
+bool simplesine_tau_singleODCW();
+
+/* PUBLIC STRUCTS */
+
 
 #endif
