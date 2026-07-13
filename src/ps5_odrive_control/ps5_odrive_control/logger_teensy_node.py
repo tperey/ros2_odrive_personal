@@ -1,5 +1,6 @@
 import threading
 import serial
+import serial.tools.list_ports
 
 import rclpy
 from rclpy.node import Node
@@ -12,12 +13,17 @@ from datetime import datetime
 import struct
 
 # Protocol info
+TEENSY_VID = 0x16C0
+TEENSY_PID = 0x0483
+
 # Expect [0xAA] [0x55] [t] [pos] [vel] [iq_set] [iq_measured] [tau_target] [tau_actual] [cmd] [checksum]
 PACKET_SIZE = 35  # SINGLE_TEL_PCKT_SIZE
 
+BUF_SIZE_WARNING = 525  # Behind by 3x cycles of 5 packets (of 35 bits)
+
+
 class LoggerNode(Node):
     def __init__(self,
-                 port='/dev/ttyACM0',
                  baud=115200,
                  topic='telemetry_teensy',
                  log_path='logs',
@@ -29,10 +35,11 @@ class LoggerNode(Node):
         self.create_timer(0.01, self.publish_latest)   # 100 Hz
 
         # Open serial port to Teensy
-        self._buf = bytearray()
+        self._read_buf = bytearray()  # Separate array, for faster reads
         self._started = False
         try:
-            self.ser = serial.Serial(port, baud, timeout=0.1)
+            port = self.find_teensy()
+            self.ser = serial.Serial(port, baud, timeout=0)
             self.get_logger().info(f"Connected to MCU on {port} at {baud} baud")
 
             # Signal start
@@ -49,7 +56,7 @@ class LoggerNode(Node):
                     time.sleep(0.2)
                     self.get_logger().info("Waiting for TEENSY ack...")
         except serial.SerialException as e:
-            self.get_logger().error(f"Failed to MCU to MCU: {e}")
+            self.get_logger().error(f"Failed to connect to MCU: {e}")
             raise e
         
         # Serial thread
@@ -61,6 +68,8 @@ class LoggerNode(Node):
         self.reader_thread.start()
 
         # Logging
+        self._buf = bytearray()
+        self.create_timer(0.005, self._process_serial_buffer)  # Timer for parsing read serial data
         self.log_dict = {
             'time': [],
             'pos': [],
@@ -75,91 +84,120 @@ class LoggerNode(Node):
         self._logTime = logTime
         if self._logTime:
             self.N = 0
-            self.print_N = 60000 # [Roughly every 1 min]
+            self.print_N = 1000 # [Roughly every 1 sec]
             self.sum_dt = 0
             self.prev_t = perf_counter()
             self.isFirst = True
 
+    def find_teensy(self):
+        ports = serial.tools.list_ports.comports()
+
+        for port in ports:
+            if port.vid == TEENSY_VID and port.pid == TEENSY_PID:
+                print(f"Found Teensy: {port.device}")
+                return port.device
+
+        raise RuntimeError("Teensy not found")
 
     def serial_reader(self):
         while rclpy.ok():
             try:
-                # Read bytes
-                if self.ser.in_waiting:  # Bring in available byte
-                    self._buf += self.ser.read(self.ser.in_waiting)
-                
-                # Process new msg
-                while len(self._buf) >= PACKET_SIZE:  # If at least PACKET_SIZE bytes, then new msg has arrived
-
-                    # Find start
-                    start_idx = self._buf.find(b'\xAA\x55')
-
-                    if start_idx == -1:
-                        # No starts found, so clear
-                        self._buf.clear()
-                        self.get_logger().warn("---Missing start byte. Likely dropped a packet.")
-
-                        break
-                    elif start_idx > 0:
-                        # Discard before start
-                        self._buf = self._buf[start_idx:]
-                        self.get_logger().warn("```Clearing before start byte. Likely dropped a packet.")
-                    
-                    # Extract (protocol dependent)
-                    t_ms_bits = self._buf[2:6] 
-                    pos_bits = self._buf[6:10]
-                    vel_bits = self._buf[10:14]
-                    iq_set_bits = self._buf[14:18]
-                    iq_act_bits = self._buf[18:22]
-                    tau_set_bits = self._buf[22:26]
-                    tau_act_bits = self._buf[26:30]
-                    cmd_bits = self._buf[30:34]
-
-                    # Compute checksum
-                    checksum = self._buf[PACKET_SIZE-1]
-                    cs_calc = (0xAA + 0x55 + sum(t_ms_bits) + sum(pos_bits) + sum(vel_bits) + 
-                               sum(iq_set_bits) + sum(iq_act_bits) + sum(tau_set_bits) + 
-                               sum(tau_act_bits) + sum(cmd_bits)) & 0xFF
-                    if cs_calc != checksum:
-                        self.get_logger().warn("+++Checksum mismatch, discarding packet")
-                        self._buf = self._buf[1:]  # discard first byte and retry
-                        continue
-
-                    # Convert payload from bits
-                    t_ms = int.from_bytes(t_ms_bits, byteorder='little', signed=False)
-                    pos = struct.unpack('<f', pos_bits)[0]
-                    vel = struct.unpack('<f', vel_bits)[0]
-                    iq_set = struct.unpack('<f', iq_set_bits)[0]
-                    iq_act = struct.unpack('<f', iq_act_bits)[0]
-                    tau_set = struct.unpack('<f', tau_set_bits)[0]
-                    tau_act = struct.unpack('<f', tau_act_bits)[0]
-                    cmd = struct.unpack('<f', cmd_bits)[0]
-
-                    self._buf = self._buf[PACKET_SIZE:]  # Remove packet we just processed
-
-                    # Update latest
-                    cur_telemetry = [t_ms, pos, vel, iq_set, iq_act, tau_set, tau_act, cmd]
+                # Constantly grab bytes as soon as they are available.
+                # Store them for separate parsing
+                n = self.ser.in_waiting
+                if n:
+                    data = self.ser.read(n)
                     with self.lock:
-                        self.latest_telemetry = cur_telemetry
+                        self._read_buf.extend(data)
 
-                    # Logging
-                    for (dict_key, telemetry_entry) in zip(self.log_dict.keys(), cur_telemetry):
-                        (self.log_dict[dict_key]).append(telemetry_entry)
-
-                    if self._logTime:
-                        if self.isFirst:
-                            self.prev_t = perf_counter() # No time on first. Just initialize prev_t
-                            self.isFirst = False
-                        else:
-                            self.N += 1
-                            cur_t = perf_counter()
-                            self.sum_dt += cur_t - self.prev_t
-                            if self.N % self.print_N == 0:
-                                self.get_logger().info(f"Mean dt btw serial reads, so far = {self.sum_dt/self.N}")
-                            self.prev_t = cur_t
-
+                        if len(self._read_buf) > 500:
+                            self.get_logger().warn(f"WARNING: read_buf has {len(self._read_buf)} bytes")
             except serial.SerialException as e:
                 self.get_logger().error(f"Serial error: {e}")
+    
+    def _process_serial_buffer(self):
+        try:
+            # Transfer and clear read buffer
+            with self.lock:
+                self._buf.extend(self._read_buf)
+                self._read_buf.clear()
+
+            # Process new msgs
+            while len(self._buf) >= PACKET_SIZE:  # If at least PACKET_SIZE bytes, then there are still msgs to process
+
+                # Find start
+                start_idx = self._buf.find(b'\xAA\x55')
+
+                if start_idx == -1:
+                    # No starts found, so clear
+                    self._buf.clear()
+                    self.get_logger().warn("---Missing start byte. Likely dropped a packet.")
+
+                    break
+                elif start_idx > 0:
+                    # Discard before start
+                    self._buf = self._buf[start_idx:]
+                    self.get_logger().warn("```Clearing before start byte. Likely dropped a packet.")
+                
+                if len(self._buf) < PACKET_SIZE:
+                    self.get_logger().warn("          Breaking after broken packet")
+                    break  # wait for more bytes to arrive before parsing further
+
+                # Extract (protocol dependent)
+                t_ms_bits = self._buf[2:6] 
+                pos_bits = self._buf[6:10]
+                vel_bits = self._buf[10:14]
+                iq_set_bits = self._buf[14:18]
+                iq_act_bits = self._buf[18:22]
+                tau_set_bits = self._buf[22:26]
+                tau_act_bits = self._buf[26:30]
+                cmd_bits = self._buf[30:34]
+
+                # Convert payload from bits
+                t_ms = int.from_bytes(t_ms_bits, byteorder='little', signed=False)
+                pos = struct.unpack('<f', pos_bits)[0]
+                vel = struct.unpack('<f', vel_bits)[0]
+                iq_set = struct.unpack('<f', iq_set_bits)[0]
+                iq_act = struct.unpack('<f', iq_act_bits)[0]
+                tau_set = struct.unpack('<f', tau_set_bits)[0]
+                tau_act = struct.unpack('<f', tau_act_bits)[0]
+                cmd = struct.unpack('<f', cmd_bits)[0]
+
+                # Compute checksum
+                checksum = self._buf[PACKET_SIZE-1]
+                cs_calc = (0xAA + 0x55 + sum(t_ms_bits) + sum(pos_bits) + sum(vel_bits) + 
+                            sum(iq_set_bits) + sum(iq_act_bits) + sum(tau_set_bits) + 
+                            sum(tau_act_bits) + sum(cmd_bits)) & 0xFF
+                if cs_calc != checksum:
+                    self.get_logger().warn("+++Checksum mismatch, discarding packet")
+                    self._buf = self._buf[1:]  # discard first byte and retry
+                    continue
+
+                self._buf = self._buf[PACKET_SIZE:]  # Remove packet we just processed
+
+                # Update latest
+                cur_telemetry = [t_ms, pos, vel, iq_set, iq_act, tau_set, tau_act, cmd]
+                with self.lock:
+                    self.latest_telemetry = cur_telemetry
+
+                # Logging
+                for (dict_key, telemetry_entry) in zip(self.log_dict.keys(), cur_telemetry):
+                    (self.log_dict[dict_key]).append(telemetry_entry)
+
+            if self._logTime:
+                if self.isFirst:
+                    self.prev_t = perf_counter() # No time on first. Just initialize prev_t
+                    self.isFirst = False
+                else:
+                    self.N += 1
+                    cur_t = perf_counter()
+                    self.sum_dt += cur_t - self.prev_t
+                    if self.N % self.print_N == 0:
+                        self.get_logger().info(f"Mean dt btw serial processing, so far = {self.sum_dt/self.N}")
+                    self.prev_t = cur_t
+
+        except serial.SerialException as e:
+            self.get_logger().error(f"Buffer parsing error: {e}")
         
     def publish_latest(self):
         with self.lock:
@@ -187,10 +225,9 @@ class LoggerNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = LoggerNode(
-        port='/dev/ttyACM1',   # change to your MCU port
         baud=115200,
         topic='telemetry_teensy',
-        logTime = False
+        logTime = True
     )
     try:
         rclpy.spin(node)

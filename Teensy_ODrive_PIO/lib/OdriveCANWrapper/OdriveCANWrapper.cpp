@@ -122,26 +122,7 @@ void initialize_singleODCW(uint8_t n_drives_, uint32_t baud_rate_) {
 
   /* SETUP COMMS*/
   Serial.begin(115200);
-
-  // Wait for startup msg from PC. Expect 0x01
-  while (!started) {
-    if (Serial.available() > 0) {
-      uint8_t byte_in = Serial.read();
-
-      if (byte_in == 0x01) {
-        started = true;
-        Serial.write(0x10);
-      }
-    }
-  }
-
-  // // Wait for up to 3 seconds for the serial port to be opened on the PC side.
-  // // If no PC connects, continue anyway.
-  // for (int i = 0; i < 30 && !Serial; ++i) {
-  //   delay(100);
-  // }
-  // delay(200);
-
+  Serial.println("Started Teensy...");
 
   Serial.println("~~~~~~~~~~Starting ODriveCAN~~~~~~~~~~");
 
@@ -199,6 +180,20 @@ void initialize_singleODCW(uint8_t n_drives_, uint32_t baud_rate_) {
   odrv0.setAbsolutePosition(0.0f);
 
   Serial.println("~~~~~~~~~~ODrive running!~~~~~~~~~~");
+
+  // Wait for startup msg from PC. Expect 0x01
+  while (!started) {
+    if (Serial.available() > 0) {
+      uint8_t byte_in = Serial.read();
+
+      if (byte_in == 0x01) {
+        started = true;
+
+        // Hack - to make sure computer sees
+        Serial.write(0x10);
+      }
+    }
+  }
 }
 
 /* TELEMETRY*/
@@ -256,11 +251,11 @@ void sendTelemetry_singleODCW(float cmd) {
 /* BASIC TRAJECTORIES, SINGLE MOTOR */
 
 void simplesine_singleODCW() {
-  pumpEvents(can_intf); // This is required on some platforms to handle incoming feedback CAN messages
-                        // Note that on MCP2515-based platforms, this will delay for a fixed 10ms.
-                        //
-                        // This has been found to reduce the number of dropped messages, however it can be removed
-                        // for applications requiring loop times over 100Hz.
+  // pumpEvents(can_intf); // This is required on some platforms to handle incoming feedback CAN messages
+  //                       // Note that on MCP2515-based platforms, this will delay for a fixed 10ms.
+  //                       //
+  //                       // This has been found to reduce the number of dropped messages, however it can be removed
+  //                       // for applications requiring loop times over 100Hz.
 
   float SINE_PERIOD = 2.0f; // Period of the position command sine wave in seconds
 
@@ -275,13 +270,4 @@ void simplesine_singleODCW() {
 
   // print telemtry
   sendTelemetry_singleODCW(sin(phase));
-  // if (odrv0_user_data.received_feedback) {
-  //   Get_Encoder_Estimates_msg_t feedback = odrv0_user_data.last_feedback;
-  //   odrv0_user_data.received_feedback = false;
-  //   Serial.print("odrv0-pos:");
-  //   Serial.print(feedback.Pos_Estimate);
-  //   Serial.print(",");
-  //   Serial.print("odrv0-vel:");
-  //   Serial.println(feedback.Vel_Estimate);
-  // }
 }

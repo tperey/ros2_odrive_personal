@@ -52,7 +52,7 @@ def get_Odrive_init(Kp = 20.0, Kv = 0.167, KvI = 0.333, Vmax =4.0, shouldErase =
         print("----Re-configuring...")
 
         # Power
-        odrv.config.dc_bus_overvoltage_trip_level = 50
+        odrv.config.dc_bus_overvoltage_trip_level = 55
         odrv.config.dc_bus_undervoltage_trip_level = 10.5
         odrv.config.dc_max_positive_current = 11.5
         odrv.config.dc_max_negative_current = -5
@@ -100,8 +100,10 @@ def get_Odrive_init(Kp = 20.0, Kv = 0.167, KvI = 0.333, Vmax =4.0, shouldErase =
         odrv.config.enable_uart_a = False
 
         # CAN SETUP
+        odrv.can.config.protocol = Protocol.SIMPLE
         odrv.axis0.config.can.node_id = 0
         odrv.can.config.baud_rate = 1000000
+        odrv.axis0.config.can.heartbeat_msg_rate_ms = 100
         odrv.axis0.config.can.encoder_msg_rate_ms = 1
         odrv.axis0.config.can.iq_msg_rate_ms = 1
 
