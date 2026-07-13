@@ -11,6 +11,10 @@ from time import perf_counter
 import os
 from datetime import datetime
 import struct
+import numpy as np
+import pickle
+import matplotlib.pyplot as plt
+from pathlib import Path
 
 # Protocol info
 TEENSY_VID = 0x16C0
@@ -219,8 +223,94 @@ class LoggerNode(Node):
         self.publisher.publish(msg)
 
     # TODO: implement log saving
-    def save_log(self):
-        pass
+    def save_plot_log(self, save_dir='logs'):
+        """
+        Save telemetry data and generate plots
+        
+        Args:
+            save_dir: Directory to save data and plots
+        """
+        # Convert to numpy arrays for plotting
+        t = np.array(self.log_dict['time'])
+        t = (t - t[0])/1000  # Convert from ms to s, and subtract start
+        pos = np.array(self.log_dict['pos'])
+        vel = np.array(self.log_dict['vel'])
+        iq_set = np.array(self.log_dict['iq_set'])
+        iq_act = np.array(self.log_dict['iq_act'])
+        tau_set = np.array(self.log_dict['tau_set'])
+        tau_act = np.array(self.log_dict['tau_act'])
+        cmd = np.array(self.log_dict['cmd'])
+
+        # Create directory if it doesn't exist
+        os.makedirs(save_dir, exist_ok=True)
+        
+        # Generate timestamp for filenames
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # Save data as pickle
+        data_filename = os.path.join(save_dir, f'logs_{timestamp}.pkl')
+        with open(data_filename, 'wb') as f:
+            pickle.dump(self.log_dict, f)
+        print(f"Data saved to: {data_filename}")
+
+
+        """ POSITION, VELOCITY, AND COMMAND """
+        # Create figure with subplots
+        fig, axes = plt.subplots(2, 1, figsize=(12, 6), sharex = True)
+        
+        # Plot 1: Position
+        axes[0].plot(t, pos, 'b-', linewidth=1.5, label='Position')
+        axes[0].plot(t, cmd, 'k--', linewidth=1.5, label='Position')
+        axes[0].set_ylabel('Position (rad)', fontsize=12)
+        axes[0].set_xlabel('Time (s)', fontsize=12)
+        axes[0].grid(True, alpha=0.3)
+        axes[0].legend(loc='upper right')
+        axes[0].set_title('Logs', fontsize=14, fontweight='bold')
+        
+        # Plot 2: Velocity
+        axes[1].plot(t, vel, 'g-', linewidth=1.5, label='Velocity')
+        axes[1].set_ylabel('Velocity (rad/s)', fontsize=12)
+        axes[1].set_xlabel('Time (s)', fontsize=12)
+        axes[1].grid(True, alpha=0.3)
+        axes[1].legend(loc='upper right')
+        
+        # Save figure
+        plot_filename = os.path.join(save_dir, f'log_pvcplot_{timestamp}.png')
+        plt.savefig(plot_filename, dpi=300, bbox_inches='tight')
+        print(f"Plot saved to: {plot_filename}")
+        
+        # Show plot
+        plt.show()
+
+        """ TORQUE AND CURRENT """
+        # Create figure with subplots
+        fig, axes = plt.subplots(2, 1, figsize=(12, 6), sharex = True)
+        
+        # Plot 1: Currents
+        axes[0].plot(t, iq_set, 'p-', linewidth=1.5, label='iq_set')
+        axes[0].plot(t, iq_act, 'r--', linewidth=1.5, label='iq_act')
+        axes[0].set_ylabel('Position (rad)', fontsize=12)
+        axes[0].set_xlabel('Time (s)', fontsize=12)
+        axes[0].grid(True, alpha=0.3)
+        axes[0].legend(loc='upper right')
+        axes[0].set_title('Logs', fontsize=14, fontweight='bold')
+        
+        # Plot 2: Tau
+        axes[1].plot(t, tau_set, 'g-', linewidth=1.5, label='tau_set')
+        axes[1].plot(t, tau_act, 'b--', linewidth=1.5, label='tau_act')
+        axes[1].set_ylabel('Velocity (rad/s)', fontsize=12)
+        axes[1].set_xlabel('Time (s)', fontsize=12)
+        axes[1].grid(True, alpha=0.3)
+        axes[1].legend(loc='upper right')
+        
+        # Save figure
+        plot_filename = os.path.join(save_dir, f'log_ctplot_{timestamp}.png')
+        plt.savefig(plot_filename, dpi=300, bbox_inches='tight')
+        print(f"Plot saved to: {plot_filename}")
+        
+        # Show plot
+        plt.show()
+
 
 def main(args=None):
     rclpy.init(args=args)
@@ -232,15 +322,15 @@ def main(args=None):
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
-        pass
+        # Check on timing stats
+        times = node.log_dict["time"]
+        dts = np.diff(np.array(times))
+        print(f"FINAL MEAN LOG DT (ms) = {np.mean(dts)}")
     finally:
-        pass
-
-        # TODO: Implement log saving
-        # print("Saving and plotting log...")
-        # DATA_DIR = Path.home() / "ws_ros2_odrive" / "src" / "ps5_odrive_control" / "ps5_odrive_control" / "sys_id" / "pend_si_data"
-        # DATA_DIR.mkdir(parents=True, exist_ok=True)
-        # node.save_plot_log(save_dir=DATA_DIR)
+        print("Saving and plotting log...")
+        DATA_DIR = Path.home() / "ws_ros2_odrive" / "src" / "ps5_odrive_control" / "ps5_odrive_control" / "logs"
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        node.save_plot_log(save_dir=DATA_DIR)
 
         node.destroy_node()
         rclpy.shutdown()
