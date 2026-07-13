@@ -80,6 +80,7 @@ def get_Odrive_init(Kp = 20.0, Kv = 0.167, KvI = 0.333, Vmax =4.0, shouldErase =
         odrv.axis0.controller.config.vel_limit_tolerance = 0.3333333333333333*Vmax
         odrv.axis0.config.torque_soft_min = -math.inf
         odrv.axis0.config.torque_soft_max = math.inf
+        odrv.axis0.config.motor.current_control_bandwidth = 2000
 
         # HOMING
         odrv.config.gpio5_mode = GpioMode.DIGITAL # Set up 5 and 6 for digital 
@@ -104,8 +105,8 @@ def get_Odrive_init(Kp = 20.0, Kv = 0.167, KvI = 0.333, Vmax =4.0, shouldErase =
         odrv.axis0.config.can.node_id = 0
         odrv.can.config.baud_rate = 1000000
         odrv.axis0.config.can.heartbeat_msg_rate_ms = 100
-        odrv.axis0.config.can.encoder_msg_rate_ms = 1
-        odrv.axis0.config.can.iq_msg_rate_ms = 1
+        odrv.axis0.config.can.encoder_msg_rate_ms = 0 # Teensy polls for values. Odrive auto-telemetry not reliable
+        odrv.axis0.config.can.iq_msg_rate_ms = 0
 
         # Cogging
         odrv.axis0.config.anticogging.enabled = True

@@ -1,6 +1,8 @@
 TODO:
 Setting up Teensy Odrive Control via CAN
 *Currently, have to run Python config (specifically, to set initial pos_esitmate), with Python scripot. SETUP TEENSY TO DO THIS
+--Specifically, need odrv0.axis0.pos_estimate = odrv0.onboard_encoder0.raw
+*Anytime you calibrate, cogging map goes by-by. Make sure its loaded
 
 Sys ID with the above
 *Write Teensy code to do:
