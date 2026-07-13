@@ -1,8 +1,6 @@
 TODO:
 Setting up Teensy Odrive Control via CAN
-*Write PI node to LOG Teensy's USB telemetry (threaded serial read, with a ros pub for visualization)
-*Reconfig Odrive via Computer
-*Wire up Teensy CAN and test
+*Currently, have to run Python config (specifically, to set initial pos_esitmate), with Python scripot. SETUP TEENSY TO DO THIS
 
 Sys ID with the above
 *Write Teensy code to do:

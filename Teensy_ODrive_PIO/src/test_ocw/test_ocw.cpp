@@ -16,8 +16,8 @@ void loop() {
         uint32_t now = micros();
         if ( (now-t_prev) > 1000) {
             // Feels pointless to code these separately
-            //status_ok = simplesine_pos_singleODCW();
-            status_ok = simplesine_tau_singleODCW();
+            status_ok = simplesine_pos_singleODCW();
+            //status_ok = simplesine_tau_singleODCW();
             t_prev = now;
         }
     }
