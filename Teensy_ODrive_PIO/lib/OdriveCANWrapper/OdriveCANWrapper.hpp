@@ -2,6 +2,7 @@
 #define ODRIVE_CAN_WRAPPER_HPP
 
 #include <cstdint>
+#include <cmath>
 
 // CONSTANTS
 #define DEFAULT_BAUD 1000000
@@ -27,10 +28,20 @@ struct OdriveLinearTorqueSID {
     uint32_t cycles = 100.0; // [cycles]
 };
 
+// Sinusoidal torque sys id input
+#define MAX_N_FREQS 20
+struct OdriveSinusoidTorqueSID {
+    float amps[MAX_N_FREQS];
+    float freqs[MAX_N_FREQS];
+    uint32_t cycles;
+    uint8_t n_components = 0;
+};
+
 /* PUBLIC FUNCTIONS */
 void initialize_singleODCW(uint8_t n_drives_ = 1, uint32_t baud_rate_ = DEFAULT_BAUD);
 bool simplesine_pos_singleODCW();
 bool simplesine_tau_singleODCW();
 void perform_linear_torque_sid(OdriveLinearTorqueSID cur_lt_sid);
+bool perform_sinusoidal_torque_sid(OdriveSinusoidTorqueSID cur_st_sid);
 
 #endif

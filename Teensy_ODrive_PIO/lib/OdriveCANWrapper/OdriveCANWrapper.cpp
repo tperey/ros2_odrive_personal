@@ -442,3 +442,67 @@ void perform_linear_torque_sid(OdriveLinearTorqueSID cur_lt_sid) {
   // At the end, shutdown
   stop_motor_single();
 }
+
+// Sinusoidal torque sysid
+#define PAUSE_TIME 2.5 // [s]
+bool perform_sinusoidal_torque_sid(OdriveSinusoidTorqueSID cur_st_sid) {
+
+  // Initialize
+  start_motor_single();
+  odrv0.setControllerMode(ODriveControlMode::CONTROL_MODE_TORQUE_CONTROL, ODriveInputMode::INPUT_MODE_PASSTHROUGH);
+  float t0 = 0.001*millis(); // [s]
+  uint32_t cycle_n = 0;
+  bool is_cycling = true;
+  uint32_t t_prev = micros();
+  bool status_ok = true;  // Used to allow stop in logger
+  bool pause_on = true;
+
+  while ((pause_on) && (status_ok)) {
+    float tau_setpoint = 0.0;  // [N-m]
+    float phase_t = 0.001*millis() - t0;  // [s]
+
+    // Enforce 1 kHz cycle
+    uint32_t now = micros();
+    if ( (now - t_prev) > 1000) {
+      if (is_cycling) {
+
+        // Compute sinusoidal torque
+        for (uint8_t i = 0; i < cur_st_sid.n_components; i++) {
+          tau_setpoint += cur_st_sid.amps[i]*sin(2*M_PI*cur_st_sid.freqs[i]*phase_t);
+        }
+
+        // Check for cycle, using lead frequency
+        float cycle_fraction = cur_st_sid.freqs[0]*phase_t;  // No. cycles, with decimals
+        if ((cycle_fraction - float(cycle_n)) > 1.0) {
+          cycle_n++; // If fraction > 1.0 above cycle_n, a cycle has occurred
+        }
+
+        // Check for end
+        if (cycle_n > cur_st_sid.cycles) {
+          odrv0.setTorque(0.0);
+          stop_motor_single(); // Necessary, otherwise cogging comp keeps it moving
+          is_cycling = false;
+          t0 = 0.001*millis(); 
+        } else {
+          odrv0.setTorque(tau_setpoint);
+        }
+
+      } else {
+        if (phase_t > PAUSE_TIME) {
+          // Cause break and return
+          pause_on = false; 
+        }
+      }
+
+      // Per 1 kHz actions
+      sendTelemetry_singleODCW(tau_setpoint);
+      status_ok = check_for_shutdown_msg();
+      t_prev = now;
+    }
+  }
+
+  // At the end, ensure shutdown
+  stop_motor_single();
+
+  return status_ok;
+}
