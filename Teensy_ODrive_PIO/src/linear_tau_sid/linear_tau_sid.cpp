@@ -1,8 +1,6 @@
 #include <OdriveCANWrapper.hpp>
 #include <Arduino.h>
 
-uint32_t t_prev = 0;
-
 OdriveLinearTorqueSID lt_sid_run;
 bool status_ok = true;
 
