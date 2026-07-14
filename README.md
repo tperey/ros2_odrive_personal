@@ -1,8 +1,8 @@
 TODO:
 Setting up Teensy Odrive Control via CAN
-*Write PI node to LOG Teensy's USB telemetry (threaded serial read, with a ros pub for visualization)
-*Reconfig Odrive via Computer
-*Wire up Teensy CAN and test
+*Currently, have to run Python config (specifically, to set initial pos_esitmate), with Python scripot. SETUP TEENSY TO DO THIS
+--Specifically, need odrv0.axis0.pos_estimate = odrv0.onboard_encoder0.raw
+*Anytime you calibrate, cogging map goes by-by. Make sure its loaded
 
 Sys ID with the above
 *Write Teensy code to do:

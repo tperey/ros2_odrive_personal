@@ -127,9 +127,10 @@ void initialize_singleODCW(uint8_t n_drives_, uint32_t baud_rate_) {
   Serial.println("~~~~~~~~~~Starting ODriveCAN~~~~~~~~~~");
 
   // Register callbacks for the heartbeat and encoder feedback messages
-  odrv0.onFeedback(onFeedback, &odrv0_user_data);
   odrv0.onStatus(onHeartbeat, &odrv0_user_data);
-  odrv0.onCurrents(onCurrents, &odrv0_user_data);
+  // odrv0.onFeedback(onFeedback, &odrv0_user_data); // Experiments showed we don't want to rely on Odrive for telemetry
+  // odrv0.onCurrents(onCurrents, &odrv0_user_data);
+  // odrv0.onTorques(onTorques, &odrv0_user_data); 
 
   // Configure and initialize the CAN bus interface. This function depends on
   // your hardware and the CAN stack that you're using.
@@ -198,7 +199,28 @@ void initialize_singleODCW(uint8_t n_drives_, uint32_t baud_rate_) {
 
 /* TELEMETRY*/
 
+void poll_telemetry() {
+  // Experimentation showed that relying on Odrive autosending didn't work
+  Get_Encoder_Estimates_msg_t feedback;
+  if (odrv0.request(feedback, 10)) {
+    odrv0_user_data.last_feedback = feedback;
+    odrv0_user_data.received_feedback = true;
+  }
+  Get_Iq_msg_t currents;
+  if (odrv0.request(currents, 10)) {
+    odrv0_user_data.last_currents = currents;
+    odrv0_user_data.received_currents = true;
+  }
+  Get_Torques_msg_t torques;
+  if (odrv0.request(torques, 10)) {
+    odrv0_user_data.last_torques = torques;
+    odrv0_user_data.received_torques = true;
+  }
+}
+
+
 void sendTelemetry_singleODCW(float cmd) {
+  poll_telemetry();
 
   // Get most recent telemetry
   // ZOH if nothing
@@ -352,7 +374,7 @@ bool simplesine_tau_singleODCW() {
     is_first = false;
   }
 
-  float AMP = 0.05;  // [N-m]
+  float AMP = 0.1;  // [N-m]
   float SINE_PERIOD = 2.0f; // Period of the position command sine wave in seconds
 
   float t = 0.001 * millis();
