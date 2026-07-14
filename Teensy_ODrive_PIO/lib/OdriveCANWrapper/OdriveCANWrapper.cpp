@@ -270,6 +270,26 @@ void stop_motor_single() {
   }
 }
 
+void start_motor_single() {
+  while (odrv0_user_data.last_heartbeat.Axis_State != ODriveAxisState::AXIS_STATE_CLOSED_LOOP_CONTROL) {
+    odrv0.clearErrors();
+    delay(1);
+    odrv0.setState(ODriveAxisState::AXIS_STATE_CLOSED_LOOP_CONTROL);
+
+    // Pump events for 150ms. This delay is needed for two reasons;
+    // 1. If there is an error condition, such as missing DC power, the ODrive might
+    //    briefly attempt to enter CLOSED_LOOP_CONTROL state, so we can't rely
+    //    on the first heartbeat response, so we want to receive at least two
+    //    heartbeats (100ms default interval).
+    // 2. If the bus is congested, the setState command won't get through
+    //    immediately but can be delayed.
+    for (int i = 0; i < 15; ++i) {
+      delay(10);
+      pumpEvents(can_intf);
+    }
+  }
+}
+
 // Called cyclically to stop control if logger signals end
 bool check_for_shutdown_msg() {
   static String incoming = "";
@@ -345,4 +365,57 @@ bool simplesine_tau_singleODCW() {
 
   // Always check for shutdown
   return check_for_shutdown_msg();
+}
+
+void perform_linear_torque_sid(OdriveLinearTorqueSID cur_lt_sid) {
+
+  // Initialize
+  odrv0.setControllerMode(ODriveControlMode::CONTROL_MODE_TORQUE_CONTROL, ODriveInputMode::INPUT_MODE_PASSTHROUGH);
+  float t0 = 0.001*millis(); // [s]
+  uint32_t cycle_n = 0;
+  bool is_rising = true;
+  uint32_t t_prev = millis();
+  bool status_ok = true;  // Used to allow stop in logger
+
+  while ((cycle_n < cur_lt_sid.cycles) && (status_ok)) {
+    float tau_setpoint = 0.0;  // [N-m]
+    float phase_t = 0.001*millis() - t0;  // [s]
+
+    // Enforce 1 kHz cycle
+    uint32_t now = millis();
+    if ( (now - t_prev) > 1000) {
+      if (is_rising) {
+        tau_setpoint = -(cur_lt_sid.amp/cur_lt_sid.ramp_t)*phase_t;
+        odrv0.setTorque(tau_setpoint);
+
+        if (phase_t > cur_lt_sid.ramp_t) {
+          // End of rise. Begin fall
+          odrv0.setTorque(0.0);
+          stop_motor_single();
+          is_rising = false;
+          t0 = 0.001*millis(); 
+        }
+
+      } else {
+
+        if (phase_t > cur_lt_sid.fall_t) {
+          // End of fall, move to next cycle
+          cycle_n++;
+
+          odrv0.setTorque(0.0);
+          start_motor_single();
+          is_rising = true;
+          t0 = 0.001*millis(); 
+        }
+      }
+
+      // Per 1 kHz actions
+      sendTelemetry_singleODCW(tau_setpoint);
+      status_ok = check_for_shutdown_msg();
+      t_prev = now;
+    }
+  }
+
+  // At the end, shutdown
+  stop_motor_single();
 }

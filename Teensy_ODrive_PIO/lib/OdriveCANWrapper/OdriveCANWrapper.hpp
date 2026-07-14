@@ -22,6 +22,13 @@ bool simplesine_pos_singleODCW();
 bool simplesine_tau_singleODCW();
 
 /* PUBLIC STRUCTS */
+// Linear torque sys id input
+struct OdriveLinearTorqueSID {
+    float amp = 0.05; // [N-m], pre-cogging
+    float ramp_t = 5.0; // [s]
+    float fall_t = 2.0; // [s]
+    uint32_t cycles = 10.0; // [cycles]
+};
 
 
 #endif
