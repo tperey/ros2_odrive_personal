@@ -159,6 +159,8 @@ void initialize_singleODCW(uint8_t n_drives_, uint32_t baud_rate_) {
   Serial.print("DC current [A]: ");
   Serial.println(vbus.Bus_Current);
 
+  odrv0.setAbsolutePosition(HOMED_STARTING_POS_ESTIMATE); // Zero starting position
+
   Serial.println("Enabling closed loop control...");
   while (odrv0_user_data.last_heartbeat.Axis_State != ODriveAxisState::AXIS_STATE_CLOSED_LOOP_CONTROL) {
     odrv0.clearErrors();
@@ -177,8 +179,6 @@ void initialize_singleODCW(uint8_t n_drives_, uint32_t baud_rate_) {
       pumpEvents(can_intf);
     }
   }
-
-  odrv0.setAbsolutePosition(0.0f);
 
   Serial.println("~~~~~~~~~~ODrive running!~~~~~~~~~~");
 
@@ -231,19 +231,20 @@ void sendTelemetry_singleODCW(float cmd) {
   static float cur_Iq_Measured = 0.0;
   static float cur_Tau_Target = 0.0;
   static float cur_Tau_Estimate = 0.0;
+  // Flip ODrive frame of reference sign (except for currents, which are already reverse)
   if (odrv0_user_data.received_feedback) {
-    cur_Pos_Estimate = odrv0_user_data.last_feedback.Pos_Estimate;
-    cur_Vel_Estimate = odrv0_user_data.last_feedback.Vel_Estimate;
+    cur_Pos_Estimate = -1*odrv0_user_data.last_feedback.Pos_Estimate;
+    cur_Vel_Estimate = -1*odrv0_user_data.last_feedback.Vel_Estimate;
     odrv0_user_data.received_feedback = false;
   }
   if (odrv0_user_data.received_currents) {
-    cur_Iq_Setpoint = -1*odrv0_user_data.last_currents.Iq_Setpoint;
-    cur_Iq_Measured = -1*odrv0_user_data.last_currents.Iq_Measured;
+    cur_Iq_Setpoint = odrv0_user_data.last_currents.Iq_Setpoint;
+    cur_Iq_Measured = odrv0_user_data.last_currents.Iq_Measured;
     odrv0_user_data.received_currents = false;
   }
   if (odrv0_user_data.received_torques) {
-    cur_Tau_Target = odrv0_user_data.last_torques.Torque_Target;
-    cur_Tau_Estimate = odrv0_user_data.last_torques.Torque_Estimate;
+    cur_Tau_Target = -1*odrv0_user_data.last_torques.Torque_Target;
+    cur_Tau_Estimate = -1*odrv0_user_data.last_torques.Torque_Estimate;
     odrv0_user_data.received_torques = false;
   }
 
@@ -396,7 +397,7 @@ void perform_linear_torque_sid(OdriveLinearTorqueSID cur_lt_sid) {
   float t0 = 0.001*millis(); // [s]
   uint32_t cycle_n = 0;
   bool is_rising = true;
-  uint32_t t_prev = millis();
+  uint32_t t_prev = micros();
   bool status_ok = true;  // Used to allow stop in logger
 
   while ((cycle_n < cur_lt_sid.cycles) && (status_ok)) {
@@ -404,7 +405,7 @@ void perform_linear_torque_sid(OdriveLinearTorqueSID cur_lt_sid) {
     float phase_t = 0.001*millis() - t0;  // [s]
 
     // Enforce 1 kHz cycle
-    uint32_t now = millis();
+    uint32_t now = micros();
     if ( (now - t_prev) > 1000) {
       if (is_rising) {
         tau_setpoint = -(cur_lt_sid.amp/cur_lt_sid.ramp_t)*phase_t;
@@ -413,7 +414,7 @@ void perform_linear_torque_sid(OdriveLinearTorqueSID cur_lt_sid) {
         if (phase_t > cur_lt_sid.ramp_t) {
           // End of rise. Begin fall
           odrv0.setTorque(0.0);
-          stop_motor_single();
+          stop_motor_single(); // Necessary, otherwise cogging comp keeps it moving
           is_rising = false;
           t0 = 0.001*millis(); 
         }

@@ -262,7 +262,6 @@ class LoggerNode(Node):
         
         # Plot 1: Position
         axes[0].plot(t, pos, 'b-', linewidth=1.5, label='Position')
-        axes[0].plot(t, cmd, 'k--', linewidth=1.5, label='Position')
         axes[0].set_ylabel('Position (rad)', fontsize=12)
         axes[0].set_xlabel('Time (s)', fontsize=12)
         axes[0].grid(True, alpha=0.3)

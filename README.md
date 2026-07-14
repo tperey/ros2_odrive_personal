@@ -1,8 +1,10 @@
 TODO:
 Setting up Teensy Odrive Control via CAN
-*Currently, have to run Python config (specifically, to set initial pos_esitmate), with Python scripot. SETUP TEENSY TO DO THIS
---Specifically, need odrv0.axis0.pos_estimate = odrv0.onboard_encoder0.raw
+*Currently, have to MANUALLY home motor to known position (with paint marker), and then START/RESET Teensy at that position
+--Currently, manually set pos_estimate to that position on boot in Teensy: 0.3632275462150574
+--Ideally, in order to start from anywhere, should run odrv0.axis0.pos_estimate = odrv0.onboard_encoder0.raw (but with CAN)
 *Anytime you calibrate, cogging map goes by-by. Make sure its loaded
+*There may be some stability issues with Odrive cogging comp. Motor moves a lot if you are moving but set torque to 0 (and sometimes speed increases to infinity).
 
 Sys ID with the above
 *Write Teensy code to do:
