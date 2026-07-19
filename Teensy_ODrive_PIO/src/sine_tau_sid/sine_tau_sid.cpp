@@ -28,9 +28,11 @@ void setup() {
 }
 
 void loop() {
-    while (status_ok) {
-        for (uint8_t i = 0; i < n_runs; i++) {
-            status_ok = perform_sinusoidal_torque_sid(st_sid_runs[i]);
+    for (uint8_t i = 0; i < n_runs; i++) {
+        status_ok = perform_sinusoidal_torque_sid(st_sid_runs[i]);
+
+        while (!status_ok) {
+            // Infinite loop if stop msg received
         }
     }
 }
