@@ -507,10 +507,14 @@ bool perform_sinusoidal_torque_sid(OdriveSinusoidTorqueSID cur_st_sid) {
   return status_ok;
 }
 
-void perform_linear_position_sid(OdriveLinearPositionSID cur_lp_sid) {
+bool perform_linear_position_sid(OdriveLinearPositionSID cur_lp_sid) {
 
   // Initialize
+  odrv0.setAbsolutePosition(0.0); // Zero start position for easy cogging map generation
+  odrv0.setPosGain(200.0);
+  //odrv0.setVelGains(0.333, 10.0);
   odrv0.setControllerMode(ODriveControlMode::CONTROL_MODE_POSITION_CONTROL, ODriveInputMode::INPUT_MODE_PASSTHROUGH);
+
   float t0 = 0.001*millis(); // [s]
   float fall_start_pos = 0.0;  // [rev]. Position from which to move back to 0.
   uint32_t cycle_n = 0;
@@ -520,7 +524,7 @@ void perform_linear_position_sid(OdriveLinearPositionSID cur_lp_sid) {
 
   while ((cycle_n < cur_lp_sid.cycles) && (status_ok)) {
     float pos_setpoint = 0.0;  // [rev]
-    float ffwd_vel = cur_lp_sid.vel; // [rev/s]
+    // float ffwd_vel = cur_lp_sid.vel; // [rev/s]
     float phase_t = 0.001*millis() - t0;  // [s]
 
     // Enforce 1 kHz cycle
@@ -530,8 +534,8 @@ void perform_linear_position_sid(OdriveLinearPositionSID cur_lp_sid) {
         pos_setpoint = (cur_lp_sid.vel)*phase_t;
 
         odrv0.setPosition(
-          pos_setpoint,
-          ffwd_vel  // velocity feedforward (optional)
+          pos_setpoint//,
+          // ffwd_vel  // velocity feedforward (optional)
         );
 
         // Check for desired revolutions (base on setpoint, bc easier)
@@ -546,8 +550,8 @@ void perform_linear_position_sid(OdriveLinearPositionSID cur_lp_sid) {
         pos_setpoint = fall_start_pos - (cur_lp_sid.vel)*phase_t;
 
         odrv0.setPosition(
-          pos_setpoint,
-          ffwd_vel  // velocity feedforward (optional)
+          pos_setpoint//,
+          // ffwd_vel  // velocity feedforward (optional)
         );
 
         // Check for return to 0
@@ -562,12 +566,16 @@ void perform_linear_position_sid(OdriveLinearPositionSID cur_lp_sid) {
       }
 
       // Per 1 kHz actions
-      sendTelemetry_singleODCW(pos_setpoint);
+      sendTelemetry_singleODCW(-pos_setpoint);
       status_ok = check_for_shutdown_msg();
       t_prev = now;
     }
   }
 
-  // At the end, shutdown
+  // At the end, reset and shutdown
+  odrv0.setPosGain(20.0);
+  //odrv0.setVelGains(0.333, 0.333);
   stop_motor_single();
+
+  return status_ok;
 }
