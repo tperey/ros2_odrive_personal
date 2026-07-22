@@ -271,6 +271,62 @@ void sendTelemetry_singleODCW(float cmd) {
 
 }
 
+void sendTelemetry_singleODCW_pendulum(float cmd, float* pend_data) {
+  poll_telemetry();
+
+  // Get most recent telemetry
+  // ZOH if nothing
+  uint32_t t_ms = millis();
+  static float cur_Pos_Estimate = 0.0;
+  static float cur_Vel_Estimate = 0.0;
+  static float cur_Iq_Setpoint = 0.0;
+  static float cur_Iq_Measured = 0.0;
+  static float cur_Tau_Target = 0.0;
+  static float cur_Tau_Estimate = 0.0;
+  // Flip ODrive frame of reference sign (except for currents, which are already reverse)
+  if (odrv0_user_data.received_feedback) {
+    cur_Pos_Estimate = -1*odrv0_user_data.last_feedback.Pos_Estimate;
+    cur_Vel_Estimate = -1*odrv0_user_data.last_feedback.Vel_Estimate;
+    odrv0_user_data.received_feedback = false;
+  }
+  if (odrv0_user_data.received_currents) {
+    cur_Iq_Setpoint = odrv0_user_data.last_currents.Iq_Setpoint;
+    cur_Iq_Measured = odrv0_user_data.last_currents.Iq_Measured;
+    odrv0_user_data.received_currents = false;
+  }
+  if (odrv0_user_data.received_torques) {
+    cur_Tau_Target = -1*odrv0_user_data.last_torques.Torque_Target;
+    cur_Tau_Estimate = -1*odrv0_user_data.last_torques.Torque_Estimate;
+    odrv0_user_data.received_torques = false;
+  }
+
+  // Build packet
+  uint8_t packet[SING_PEND_TEL_PKCT_SIZE];
+
+  packet[0] = 0xAA;  // Start bits
+  packet[1] = 0x55;
+
+  memcpy(&packet[2], &t_ms, 4);  // Telemetry
+  memcpy(&packet[6], &cur_Pos_Estimate, 4);
+  memcpy(&packet[10], &cur_Vel_Estimate, 4);
+  memcpy(&packet[14], &cur_Iq_Setpoint, 4);
+  memcpy(&packet[18], &cur_Iq_Measured, 4);
+  memcpy(&packet[22], &cur_Tau_Target, 4);
+  memcpy(&packet[26], &cur_Tau_Estimate, 4);
+  memcpy(&packet[30], &pend_data[0], 4);
+  memcpy(&packet[34], &pend_data[1], 4);
+  memcpy(&packet[38], &pend_data[2], 4);
+  memcpy(&packet[42], &cmd, 4);  // Units can vary
+
+  uint8_t checksum = 0; // Simple checksum = sum of previous bytes modulo 256
+  for (int i = 0; i < (SING_PEND_TEL_PKCT_SIZE-1); i++) checksum += packet[i];
+  packet[(SING_PEND_TEL_PKCT_SIZE-1)] = checksum;
+
+  Serial.write(packet, SING_PEND_TEL_PKCT_SIZE);  // Send packet
+
+}
+
+
 /* SAFE SHUTDOWN */
 
 void stop_motor_single() {
@@ -496,6 +552,69 @@ bool perform_sinusoidal_torque_sid(OdriveSinusoidTorqueSID cur_st_sid) {
 
       // Per 1 kHz actions
       sendTelemetry_singleODCW(tau_setpoint);
+      status_ok = check_for_shutdown_msg();
+      t_prev = now;
+    }
+  }
+
+  // At the end, ensure shutdown
+  stop_motor_single();
+
+  return status_ok;
+}
+
+/* With Encoder, Sinusoidal Torque*/
+bool perform_sid_with_pend_sinetorque(OdriveSinusoidTorqueSID cur_st_sid, float* pend_data) {
+
+  // Initialize
+  start_motor_single();
+  odrv0.setControllerMode(ODriveControlMode::CONTROL_MODE_TORQUE_CONTROL, ODriveInputMode::INPUT_MODE_PASSTHROUGH);
+  float t0 = 0.001*millis(); // [s]
+  uint32_t cycle_n = 0;
+  bool is_cycling = true;
+  uint32_t t_prev = micros();
+  bool status_ok = true;  // Used to allow stop in logger
+  bool pause_on = true;
+
+  while ((pause_on) && (status_ok)) {
+    float tau_setpoint = 0.0;  // [N-m]
+    float phase_t = 0.001*millis() - t0;  // [s]
+
+    // Enforce 1 kHz cycle
+    uint32_t now = micros();
+    if ( (now - t_prev) > 1000) {
+      if (is_cycling) {
+
+        // Compute sinusoidal torque
+        for (uint8_t i = 0; i < cur_st_sid.n_components; i++) {
+          tau_setpoint += cur_st_sid.amps[i]*sin(2*M_PI*cur_st_sid.freqs[i]*phase_t);
+        }
+
+        // Check for cycle, using lead frequency
+        float cycle_fraction = cur_st_sid.freqs[0]*phase_t;  // No. cycles, with decimals
+        if ((cycle_fraction - float(cycle_n)) > 1.0) {
+          cycle_n++; // If fraction > 1.0 above cycle_n, a cycle has occurred
+        }
+
+        // Check for end
+        if (cycle_n > cur_st_sid.cycles) {
+          odrv0.setTorque(0.0);
+          stop_motor_single(); // Necessary, otherwise cogging comp keeps it moving
+          is_cycling = false;
+          t0 = 0.001*millis(); 
+        } else {
+          odrv0.setTorque(tau_setpoint);
+        }
+
+      } else {
+        if (phase_t > PAUSE_TIME) {
+          // Cause break and return
+          pause_on = false; 
+        }
+      }
+
+      // Per 1 kHz actions
+      sendTelemetry_singleODCW_pendulum(tau_setpoint, pend_data);
       status_ok = check_for_shutdown_msg();
       t_prev = now;
     }

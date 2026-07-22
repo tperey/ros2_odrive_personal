@@ -9,6 +9,7 @@
 #define ODRV0_NODE_ID 0
 
 #define SINGLE_TEL_PKCT_SIZE 35 // 4 bits * 8 telemetry entries + 2 start bits + 1 checksum bit
+#define SING_PEND_TEL_PKCT_SIZE 47 // 4 bits * 11 telemetry entries + 2 start bits + 1 checksum bit
 
 #define M8325S_TORQUE_CONSTANT 0.083  // [N-m/A]
 
@@ -50,6 +51,7 @@ bool simplesine_pos_singleODCW();
 bool simplesine_tau_singleODCW();
 void perform_linear_torque_sid(OdriveLinearTorqueSID cur_lt_sid);
 bool perform_sinusoidal_torque_sid(OdriveSinusoidTorqueSID cur_st_sid);
+bool perform_sid_with_pend_sinetorque(OdriveSinusoidTorqueSID cur_st_sid, float* pend_data); // With pendulum
 bool perform_linear_position_sid(OdriveLinearPositionSID cur_lp_sid);  // Likely most useful for personal cogging, so should turn Odrive's off
 
 #endif
