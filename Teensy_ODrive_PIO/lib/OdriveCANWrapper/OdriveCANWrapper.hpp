@@ -3,6 +3,8 @@
 
 #include <cstdint>
 #include <cmath>
+#include <AccelKF.hpp>
+#include <Encoder.h>
 
 // CONSTANTS
 #define DEFAULT_BAUD 1000000
@@ -51,7 +53,7 @@ bool simplesine_pos_singleODCW();
 bool simplesine_tau_singleODCW();
 void perform_linear_torque_sid(OdriveLinearTorqueSID cur_lt_sid);
 bool perform_sinusoidal_torque_sid(OdriveSinusoidTorqueSID cur_st_sid);
-bool perform_sid_with_pend_sinetorque(OdriveSinusoidTorqueSID cur_st_sid, float* pend_data); // With pendulum
+bool perform_sid_with_pend_sinetorque(OdriveSinusoidTorqueSID cur_st_sid, AccelKF* thisKF, Encoder* thisEncoder, float rad_per_pulse); // With pendulum
 bool perform_linear_position_sid(OdriveLinearPositionSID cur_lp_sid);  // Likely most useful for personal cogging, so should turn Odrive's off
 
 #endif

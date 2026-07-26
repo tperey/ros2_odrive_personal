@@ -6,3 +6,6 @@ float32 iq_act
 float32 tau_set
 float32 tau_act
 float32 cmd
+float32 pend_pos
+float32 pend_vel
+float32 pend_acc

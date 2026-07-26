@@ -564,7 +564,7 @@ bool perform_sinusoidal_torque_sid(OdriveSinusoidTorqueSID cur_st_sid) {
 }
 
 /* With Encoder, Sinusoidal Torque*/
-bool perform_sid_with_pend_sinetorque(OdriveSinusoidTorqueSID cur_st_sid, float* pend_data) {
+bool perform_sid_with_pend_sinetorque(OdriveSinusoidTorqueSID cur_st_sid, AccelKF* thisKF, Encoder* thisEncoder, float rad_per_pulse) {
 
   // Initialize
   start_motor_single();
@@ -575,6 +575,7 @@ bool perform_sid_with_pend_sinetorque(OdriveSinusoidTorqueSID cur_st_sid, float*
   uint32_t t_prev = micros();
   bool status_ok = true;  // Used to allow stop in logger
   bool pause_on = true;
+  float pend_data[3] = {0.0, 0.0, 0.0};
 
   while ((pause_on) && (status_ok)) {
     float tau_setpoint = 0.0;  // [N-m]
@@ -613,7 +614,15 @@ bool perform_sid_with_pend_sinetorque(OdriveSinusoidTorqueSID cur_st_sid, float*
         }
       }
 
-      // Per 1 kHz actions
+      /* Per 1 kHz Actions*/
+
+      // Encoder and Kalman filter
+      float theta_meas = rad_per_pulse*thisEncoder->read();
+      thisKF->update(theta_meas);
+      pend_data[0] = thisKF->getPosition();
+      pend_data[1] = thisKF->getVelocity();
+      pend_data[2] = thisKF->getAcceleration();
+
       sendTelemetry_singleODCW_pendulum(tau_setpoint, pend_data);
       status_ok = check_for_shutdown_msg();
       t_prev = now;

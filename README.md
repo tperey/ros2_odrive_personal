@@ -8,9 +8,10 @@ Setting up Teensy Odrive Control via CAN
 
 Sys ID with the above
 *Write Teensy code to do:
---Sinuosidal torques
---Torque ramps
---Others?
+--Sinuosidal torques, with encoder
++++++Write the python logger expecting the proper packet size
+CONSIDER
++++++Consolidate into existing functs
 
 NOTES
 --Code generally expects Teensy on ACM1 and Odrive on ACM0

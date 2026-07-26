@@ -15,13 +15,15 @@ import numpy as np
 import pickle
 import matplotlib.pyplot as plt
 from pathlib import Path
+import argparse
 
 # Protocol info
 TEENSY_VID = 0x16C0
 TEENSY_PID = 0x0483
 
-# Expect [0xAA] [0x55] [t] [pos] [vel] [iq_set] [iq_measured] [tau_target] [tau_actual] [cmd] [checksum]
-PACKET_SIZE = 35  # SINGLE_TEL_PCKT_SIZE
+# Expect [0xAA] [0x55] [t] [pos] [vel] [iq_set] [iq_measured] [tau_target] [tau_actual] [cmd] {[pend pos] [pend vel] [pend acc]} [checksum]
+PACKET_BASE = 35  # SINGLE_TEL_PCKT_SIZE
+PACKET_PEND = 47
 
 BUF_SIZE_WARNING = 525  # Behind by 3x cycles of 5 packets (of 35 bits)
 
@@ -33,8 +35,15 @@ class LoggerNode(Node):
                  baud=115200,
                  topic='telemetry_teensy',
                  log_path='logs',
-                 logTime = False):
+                 logTime = False,
+                 inclPendulum = False):
         super().__init__("logger")
+
+        # Pendulum
+        self._packet_size = PACKET_BASE
+        self._incl_pendulum = inclPendulum
+        if self._incl_pendulum:
+            self._packet_size = PACKET_PEND
 
         # Ros
         self.publisher = self.create_publisher(MotorSingleTelemetry, topic, 10)
@@ -85,6 +94,9 @@ class LoggerNode(Node):
             'tau_set': [],
             'tau_act': [],
             'cmd': [],
+            'pend_pos': [],
+            'pend_vel': [],
+            'pend_acc': [],
         }
 
         self._logTime = logTime
@@ -129,7 +141,7 @@ class LoggerNode(Node):
                 self._read_buf.clear()
 
             # Process new msgs
-            while len(self._buf) >= PACKET_SIZE:  # If at least PACKET_SIZE bytes, then there are still msgs to process
+            while len(self._buf) >= self._packet_size:  # If at least PACKET_SIZE bytes, then there are still msgs to process
 
                 # Find start
                 start_idx = self._buf.find(b'\xAA\x55')
@@ -145,7 +157,7 @@ class LoggerNode(Node):
                     self._buf = self._buf[start_idx:]
                     self.get_logger().warn("```Clearing before start byte. Likely dropped a packet.")
                 
-                if len(self._buf) < PACKET_SIZE:
+                if len(self._buf) < self._packet_size:
                     self.get_logger().warn("          Breaking after broken packet")
                     break  # wait for more bytes to arrive before parsing further
 
@@ -158,6 +170,14 @@ class LoggerNode(Node):
                 tau_set_bits = self._buf[22:26]
                 tau_act_bits = self._buf[26:30]
                 cmd_bits = self._buf[30:34]
+                if self._incl_pendulum:
+                    pend_pos_bits = self._buf[34:38]
+                    pend_vel_bits = self._buf[38:42]
+                    pend_acc_bits = self._buf[42:46]
+                else:
+                    pend_pos_bits = bytearray(4)
+                    pend_vel_bits = bytearray(4)
+                    pend_acc_bits = bytearray(4)
 
                 # Convert payload from bits
                 t_ms = int.from_bytes(t_ms_bits, byteorder='little', signed=False)
@@ -168,21 +188,25 @@ class LoggerNode(Node):
                 tau_set = struct.unpack('<f', tau_set_bits)[0]
                 tau_act = struct.unpack('<f', tau_act_bits)[0]
                 cmd = struct.unpack('<f', cmd_bits)[0]
+                pend_pos = struct.unpack('<f', pend_pos_bits)[0]
+                pend_vel = struct.unpack('<f', pend_vel_bits)[0]
+                pend_acc = struct.unpack('<f', pend_acc_bits)[0]
 
                 # Compute checksum
-                checksum = self._buf[PACKET_SIZE-1]
+                checksum = self._buf[self._packet_size-1]
                 cs_calc = (0xAA + 0x55 + sum(t_ms_bits) + sum(pos_bits) + sum(vel_bits) + 
                             sum(iq_set_bits) + sum(iq_act_bits) + sum(tau_set_bits) + 
-                            sum(tau_act_bits) + sum(cmd_bits)) & 0xFF
+                            sum(tau_act_bits) + sum(cmd_bits) +
+                            sum(pend_pos_bits) + sum(pend_vel_bits) + sum(pend_acc_bits)) & 0xFF
                 if cs_calc != checksum:
                     self.get_logger().warn("+++Checksum mismatch, discarding packet")
                     self._buf = self._buf[1:]  # discard first byte and retry
                     continue
 
-                self._buf = self._buf[PACKET_SIZE:]  # Remove packet we just processed
+                self._buf = self._buf[self._packet_size:]  # Remove packet we just processed
 
                 # Update latest
-                cur_telemetry = [t_ms, pos, vel, iq_set, iq_act, tau_set, tau_act, cmd]
+                cur_telemetry = [t_ms, pos, vel, iq_set, iq_act, tau_set, tau_act, cmd, pend_pos, pend_vel, pend_acc]
                 with self.lock:
                     self.latest_telemetry = cur_telemetry
 
@@ -221,6 +245,9 @@ class LoggerNode(Node):
         msg.tau_set = value[5]
         msg.tau_act = value[6]
         msg.cmd = value[7]
+        msg.pend_pos = value[8]
+        msg.pend_vel = value[9]
+        msg.pend_acc = value[10]
 
         self.publisher.publish(msg)
 
@@ -318,14 +345,20 @@ class LoggerNode(Node):
     def stop_motor_control(self):
         self.ser.write(STOP_MSG)
 
-
 def main(args=None):
     rclpy.init(args=args)
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--pend', action='store_true', help='Include pendulum data in packet')
+    parsed, _ = parser.parse_known_args()  # parse_known_args avoids clashing with ROS args
+
     node = LoggerNode(
         baud=115200,
         topic='telemetry_teensy',
-        logTime = True
+        logTime=True,
+        inclPendulum=parsed.pend
     )
+
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
