@@ -3,19 +3,17 @@ Setting up Teensy Odrive Control via CAN
 *Currently, have to MANUALLY home motor to known position (with paint marker), and then START/RESET Teensy at that position
 --Currently, manually set pos_estimate to that position on boot in Teensy: 0.3632275462150574
 --Ideally, in order to start from anywhere, should run odrv0.axis0.pos_estimate = odrv0.onboard_encoder0.raw (but with CAN)
-*Anytime you calibrate, cogging map goes by-by. Make sure its loaded
-*There may be some stability issues with Odrive cogging comp. Motor moves a lot if you are moving but set torque to 0 (and sometimes speed increases to infinity).
 
 Sys ID with the above
-*Write Teensy code to do:
---Sinuosidal torques, with encoder
-+++++Write the python logger expecting the proper packet size
-CONSIDER
-+++++Consolidate into existing functs
+*For cogging
+--Use the JSON!
+*Test reading pendulum simultaneously
 
 NOTES
 --Code generally expects Teensy on ACM1 and Odrive on ACM0
 --Cogging
+*****Anytime you calibrate, ONBOARD cogging map goes by-by. Make sure its loaded (OR, likely you will ignore it )
+*****There may be some stability issues with Odrive cogging comp. Motor moves a lot if you are moving but set torque to 0 (and sometimes speed increases to infinity).
 1. Tried using velocity info, assuming its constant (no acceleration). But problems
 ----At low velocity setpoints, acceleration is absolutely not negligible.
 ----At high velocity setpoints, dynamics filter out cogging in the position output (can't identify it from the data), AND/OR (cogging in space)*(velcoity) > Nyquist (can't detect the spatial frequency in the sampled time). 
