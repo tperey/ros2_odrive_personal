@@ -736,10 +736,11 @@ bool perform_linear_position_sid(OdriveLinearPositionSID cur_lp_sid) {
 
 /* CONTROL */
 
-void command_odrv0_torque(float tau_setpoint) {
+float command_odrv0_torque(float tau_setpoint) {
   // Set control mode on first call
   static bool is_first = true;
   if (is_first) {
+    odrv0.setAbsolutePosition(0.0); // Cogging relies on manual home to zero.
     odrv0.setControllerMode(ODriveControlMode::CONTROL_MODE_TORQUE_CONTROL, ODriveInputMode::INPUT_MODE_PASSTHROUGH);
     is_first = false;
   }
@@ -749,13 +750,20 @@ void command_odrv0_torque(float tau_setpoint) {
 
   // Check for feedforward
   float tau_to_set = tau_setpoint;
+  float cur_pos = -1*odrv0_user_data.last_feedback.Pos_Estimate;
   if (doAnticog) {
     // Get feedforward for encoder count (i.e. cogging map index)
-    float cur_pos = -1*odrv0_user_data.last_feedback.Pos_Estimate;
-    uint16_t cur_count = static_cast<uint16_t>(std::round(std::fmod(cur_pos, ENCODER_COUNTS_PER_REV)));
-    tau_to_set += anticog_map[cur_count];
+    float counts = cur_pos * ENCODER_COUNTS_PER_REV;
+    int cur_count = static_cast<int>(std::round(std::fmod(counts, ENCODER_COUNTS_PER_REV)));
+    if (cur_count < 0) {
+        cur_count += ENCODER_COUNTS_PER_REV;  // Handle negative wrap-around
+    }
+    
+    tau_to_set += percent_anticog*anticog_map[cur_count];
   }
 
-  // Run command
-  odrv0.setTorque(tau_setpoint);
+  // Run command (have to flip sign back to Odrive space)
+  odrv0.setTorque(-tau_to_set);
+
+  return float(tau_to_set);
 }

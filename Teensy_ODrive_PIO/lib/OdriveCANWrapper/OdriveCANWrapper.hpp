@@ -62,6 +62,6 @@ void sendTelemetry_singleODCW(float cmd);
 bool check_for_shutdown_msg();
 
 void load_anticogging_config(const float* cogging_map, float cogging_percentage = 0.0, float friction = 0.0, float friction_percentage = 0.0);
-void command_odrv0_torque(float tau_setpoint);
+float command_odrv0_torque(float tau_setpoint);
 
 #endif

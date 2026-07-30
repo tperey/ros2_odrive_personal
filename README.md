@@ -6,12 +6,13 @@ Setting up Teensy Odrive Control via CAN
 
 Sys ID with the above
 *For cogging
---Use the JSON!
+--In general, cogging map seems to be working well, but HIGHLY DEPENDENT ON MANUAL HOMING TO EXACT RIGHT SPOT ON STARTUP! REALLY NEED PRECISE HOMING TO EXACT START POSITION USED TO GENERATE MAP, USING ABSOLUTE ENCODER!
 *Test reading pendulum simultaneously
 
 NOTES
 --Code generally expects Teensy on ACM1 and Odrive on ACM0
 --Cogging
+
 *****Anytime you calibrate, ONBOARD cogging map goes by-by. Make sure its loaded (OR, likely you will ignore it )
 *****There may be some stability issues with Odrive cogging comp. Motor moves a lot if you are moving but set torque to 0 (and sometimes speed increases to infinity).
 1. Tried using velocity info, assuming its constant (no acceleration). But problems
