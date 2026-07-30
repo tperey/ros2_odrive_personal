@@ -22,6 +22,7 @@ void onFeedback(Get_Encoder_Estimates_msg_t& msg, void* user_data);
 void onCanMessage(const CanMsg& msg);
 bool setupCan();
 
+
 /* GLOBAL VARS */
 static FlexCAN_T4<CAN1, RX_SIZE_256, TX_SIZE_16> can_intf;
 static ODriveCAN odrv0(wrap_can_intf(can_intf), ODRV0_NODE_ID); // Standard CAN message ID
@@ -29,6 +30,17 @@ static ODriveCAN** odrives; // Make sure all ODriveCAN instances are accounted f
 static ODriveUserData odrv0_user_data; // Keep some application-specific user data for every ODrive.
 static uint8_t n_drives = 1;
 static uint32_t baud_rate = DEFAULT_BAUD;
+
+// Feedforward
+bool doFeedforward = false; // Overall, to prevent double pollTelemetry
+
+bool doAnticog = false;  // Anticogging
+float percent_anticog = 0.0;
+float anticog_map[ENCODER_COUNTS_PER_REV] = {};
+
+bool doAntifriction = false; // Friction compensation
+float percent_antifriction = 0.0;
+float friction_offset = 0.0;  // [N-m]
 
 /* COMMON CALLBACKS */
 void onHeartbeat(Heartbeat_msg_t& msg, void* user_data) {
@@ -99,6 +111,21 @@ bool setupCan() {
   can_intf.enableFIFOInterrupt();
   can_intf.onReceive(onCanMessage);
   return true;
+}
+
+// FEEDFORWARD
+void load_anticogging_config(const float* cogging_map, float cogging_percentage, float friction, float friction_percentage) {
+  if (cogging_map) {
+    doAnticog = true;
+    memcpy(anticog_map, cogging_map, ENCODER_COUNTS_PER_REV * sizeof(float));
+    percent_anticog = cogging_percentage;
+  }
+
+  if (friction) {
+    doAntifriction = true;
+    friction_offset = friction;
+    percent_antifriction = friction_percentage;
+  }
 }
 
 // GENERAL
@@ -220,7 +247,9 @@ void poll_telemetry() {
 
 
 void sendTelemetry_singleODCW(float cmd) {
-  poll_telemetry();
+  if (!doFeedforward) {
+    poll_telemetry(); // Only required if feedforward hasn't already updated telemetry
+  }
 
   // Get most recent telemetry
   // ZOH if nothing
@@ -272,7 +301,9 @@ void sendTelemetry_singleODCW(float cmd) {
 }
 
 void sendTelemetry_singleODCW_pendulum(float cmd, float* pend_data) {
-  poll_telemetry();
+  if (!doFeedforward) {
+    poll_telemetry(); // Only required if feedforward hasn't already updated telemetry
+  }
 
   // Get most recent telemetry
   // ZOH if nothing
@@ -701,4 +732,30 @@ bool perform_linear_position_sid(OdriveLinearPositionSID cur_lp_sid) {
   stop_motor_single();
 
   return status_ok;
+}
+
+/* CONTROL */
+
+void command_odrv0_torque(float tau_setpoint) {
+  // Set control mode on first call
+  static bool is_first = true;
+  if (is_first) {
+    odrv0.setControllerMode(ODriveControlMode::CONTROL_MODE_TORQUE_CONTROL, ODriveInputMode::INPUT_MODE_PASSTHROUGH);
+    is_first = false;
+  }
+
+  // Need updated telemetry for control laws
+  poll_telemetry();
+
+  // Check for feedforward
+  float tau_to_set = tau_setpoint;
+  if (doAnticog) {
+    // Get feedforward for encoder count (i.e. cogging map index)
+    float cur_pos = -1*odrv0_user_data.last_feedback.Pos_Estimate;
+    uint16_t cur_count = static_cast<uint16_t>(std::round(std::fmod(cur_pos, ENCODER_COUNTS_PER_REV)));
+    tau_to_set += anticog_map[cur_count];
+  }
+
+  // Run command
+  odrv0.setTorque(tau_setpoint);
 }

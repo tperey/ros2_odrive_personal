@@ -21,6 +21,7 @@
 #define OPCODE_WRITE 0x01
 #define HOMED_STARTING_POS_ESTIMATE 0.3632275462150574  // What pos_estimate set to by Teensy on connection. Assumes manually homed.
 // TODO: rather than manual, use startup absolute position
+#define ENCODER_COUNTS_PER_REV 4096
 
 /* PUBLIC STRUCTS */
 // Linear torque sys id input
@@ -55,5 +56,12 @@ void perform_linear_torque_sid(OdriveLinearTorqueSID cur_lt_sid);
 bool perform_sinusoidal_torque_sid(OdriveSinusoidTorqueSID cur_st_sid);
 bool perform_sid_with_pend_sinetorque(OdriveSinusoidTorqueSID cur_st_sid, AccelKF* thisKF, Encoder* thisEncoder, float rad_per_pulse); // With pendulum
 bool perform_linear_position_sid(OdriveLinearPositionSID cur_lp_sid);  // Likely most useful for personal cogging, so should turn Odrive's off
+
+// Telemetry reads and writes
+void sendTelemetry_singleODCW(float cmd);
+bool check_for_shutdown_msg();
+
+void load_anticogging_config(const float* cogging_map, float cogging_percentage = 0.0, float friction = 0.0, float friction_percentage = 0.0);
+void command_odrv0_torque(float tau_setpoint);
 
 #endif

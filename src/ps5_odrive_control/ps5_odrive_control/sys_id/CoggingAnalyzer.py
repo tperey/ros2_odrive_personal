@@ -27,11 +27,12 @@ import sys
 COUNTS_PER_REV = 4096 #1024
 
 class CoggingAnalyzer:
-    def __init__(self, log_path, config_path):
+    def __init__(self, log_path, config_path, header_path):
 
         # Handle paths
         self.config_folder = Path(config_path)
         self.log_path = Path(log_path)
+        self.header_path = Path(header_path)
         with open(self.log_path, "rb") as f:
             log = pickle.load(f)
 
@@ -231,9 +232,9 @@ class CoggingAnalyzer:
                 plt.grid(True, alpha=0.3)
 
     """ OUTPUT TO CONFIG """
-    def output_to_json(self):
+    def output_configs(self):
 
-        # Setup
+        # JSONs
         self.config_folder.mkdir(parents=True, exist_ok=True)
         self.ave_tau_by_count = np.array(self.ave_tau_by_count)
 
@@ -248,14 +249,45 @@ class CoggingAnalyzer:
         with open(self.friction_file, "w") as f:
             json.dump(friction, f, indent=2)
         print(f"Saved friction output to {self.friction_file}")
+
+        # HEADERS
+        self.header_path.mkdir(parents=True, exist_ok=True)
+        header_file = self.header_path / "cogging_config.hpp"
+
+        if len(self.ave_tau_by_count) != COUNTS_PER_REV:
+            raise ValueError(f"Expected {COUNTS_PER_REV}-element cogging map.")
+
+        with open(header_file, "w") as f:
+            f.write("#pragma once\n\n")
+            f.write("namespace CoggingConfig {\n\n")
+            f.write(f"constexpr float cogging_friction = {friction:.4f};\n\n")
+            f.write("constexpr int kNumEncoderCounts = 4096;\n")
+            f.write("constexpr float cogging_map[kNumEncoderCounts] = {\n")
+
+            for i, value in enumerate(self.ave_tau_by_count):
+                comma = "," if i < len(self.ave_tau_by_count) - 1 else ""
+                f.write(f"    {value:.8f}f{comma}")
+
+                # Put 8 values on each line
+                if (i + 1) % 8 == 0:
+                    f.write("\n")
+                else:
+                    f.write(" ")
+
+            f.write("\n};\n\n")
+            f.write("} // namespace CoggingConfig\n")
+
+        print(f"Wrote {self.header_path}")
+
+
         
 if __name__ == "__main__":
     base_path = "/Users/trevorperey/Desktop/PersonalProjects/ros2_odrive_personal/"
     cog_log = base_path + "src/ps5_odrive_control/ps5_odrive_control/logs/cogging_personal_001/logs_20260720_203053.pkl"
     config_path = base_path + "config/m8325s_furata/"
-
-    mt = CoggingAnalyzer(cog_log, config_path)
+    header_path = base_path + "Teensy_ODrive_PIO/lib/config/m8325s_furata/"
+    mt = CoggingAnalyzer(cog_log, config_path, header_path)
     mt.plot_tau_pos()
     mt.analyze_tauc_vs_count()
     #plt.show()
-    mt.output_to_json()
+    mt.output_configs()
