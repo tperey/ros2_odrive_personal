@@ -24,7 +24,7 @@ NOTES
 ----But at low speeds, acceleration is caused by (and therefore included in) the COGGING, not the actual motor torque. So the linear regressino says there's is basically no inertia
 ----So, estiamte is no better or worse
 3. I used the onboard cogging. Seemed pretty good, but should evaluate
-
+4. I then made my own. Seemed at least as good as onboard, if not better.
 
 SSH INFO
 Via wifi: If your laptop is connected to same WiFi as pi, `ssh tperey-desktop.local` or `ssh tperey@tperey-desktop.local` should work.
