@@ -4,9 +4,14 @@ Setting up Teensy Odrive Control via CAN
 --Currently, manually set pos_estimate to that position on boot in Teensy: 0.3632275462150574
 --Ideally, in order to start from anywhere, should run odrv0.axis0.pos_estimate = odrv0.onboard_encoder0.raw (but with CAN)
 
+
 Sys ID with the above
 *For cogging
---Use the JSON!
+--Repeat using the true starting position on startup
+*For pendulum
+--Try a constant friction term
+--Could optimize filter params with linear method to minimize residual?
+--Try nonlinear method
 *Test reading pendulum simultaneously
 
 NOTES
@@ -16,7 +21,7 @@ NOTES
 *****There may be some stability issues with Odrive cogging comp. Motor moves a lot if you are moving but set torque to 0 (and sometimes speed increases to infinity).
 1. Tried using velocity info, assuming its constant (no acceleration). But problems
 ----At low velocity setpoints, acceleration is absolutely not negligible.
-----At high velocity setpoints, dynamics filter out cogging in the position output (can't identify it from the data), AND/OR (cogging in space)*(velcoity) > Nyquist (can't detect the spatial frequency in the sampled time). 
+----At high velocity setpoints, dynamics filter out cogging in the position output (can't identify it from the data), AND/OR (cogging in space)*(velocity) > Nyquist (can't detect the spatial frequency in the sampled time). 
 2. Tried bringin in accel info, but other challenges
 ----You have to numerically DIFFERENTIATE to bring in acceleration, so its noisy. Hard to know how much to filter velocity, acceleration, and torque (if at all)
 ----Again, at high speeds, can't resolve the cogging component
