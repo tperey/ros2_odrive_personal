@@ -7,7 +7,7 @@ Setting up Teensy Odrive Control via CAN
 
 Sys ID with the above
 *For cogging
---Repeat using the true starting position on startup
+--In general, cogging map seems to be working well, but HIGHLY DEPENDENT ON MANUAL HOMING TO EXACT RIGHT SPOT ON STARTUP! REALLY NEED PRECISE HOMING TO EXACT START POSITION USED TO GENERATE MAP, USING ABSOLUTE ENCODER!
 *For pendulum
 --Try a constant friction term
 --Could optimize filter params with linear method to minimize residual?
@@ -17,6 +17,7 @@ Sys ID with the above
 NOTES
 --Code generally expects Teensy on ACM1 and Odrive on ACM0
 --Cogging
+
 *****Anytime you calibrate, ONBOARD cogging map goes by-by. Make sure its loaded (OR, likely you will ignore it )
 *****There may be some stability issues with Odrive cogging comp. Motor moves a lot if you are moving but set torque to 0 (and sometimes speed increases to infinity).
 1. Tried using velocity info, assuming its constant (no acceleration). But problems
@@ -28,7 +29,7 @@ NOTES
 ----But at low speeds, acceleration is caused by (and therefore included in) the COGGING, not the actual motor torque. So the linear regressino says there's is basically no inertia
 ----So, estiamte is no better or worse
 3. I used the onboard cogging. Seemed pretty good, but should evaluate
-
+4. I then made my own. Seemed at least as good as onboard, if not better.
 
 SSH INFO
 Via wifi: If your laptop is connected to same WiFi as pi, `ssh tperey-desktop.local` or `ssh tperey@tperey-desktop.local` should work.

@@ -4,8 +4,8 @@
 #include <m8325s_furata/cogging_config.hpp>
 
 uint32_t t_prev = 0;
-
-#define ANTICOG_PERCENT_TO_USE 0.95
+float cur_count = 0;
+#define ANTICOG_PERCENT_TO_USE 1.0 // No scaling seems to be smoothest - TP 2026-07-29
 
 /* MAIN */
 void setup() {
@@ -20,8 +20,8 @@ void loop() {
         // Enforce 1 Khz Loop
         uint32_t now = micros();
         if ( (now-t_prev) > 1000) {
-            command_odrv0_torque(0.0);  // Command oNLY feedforward to test smoothness
-            sendTelemetry_singleODCW(0.0); // Send telemetry
+            cur_count = command_odrv0_torque(0.0);  // Command oNLY feedforward to test smoothness
+            sendTelemetry_singleODCW(cur_count); // Send telemetry
             status_ok = check_for_shutdown_msg();
         }
     }
