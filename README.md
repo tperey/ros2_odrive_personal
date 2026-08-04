@@ -9,9 +9,8 @@ Sys ID with the above
 *For cogging
 --In general, cogging map seems to be working well, but HIGHLY DEPENDENT ON MANUAL HOMING TO EXACT RIGHT SPOT ON STARTUP! REALLY NEED PRECISE HOMING TO EXACT START POSITION USED TO GENERATE MAP, USING ABSOLUTE ENCODER!
 *For pendulum
---Try a constant friction term
---Could optimize filter params with linear method to minimize residual?
---Try nonlinear method
+--Residuals seem exactly aligned with missing coulomb friction. Try a tanh or constant friction term? WON'T BE ABLE TO USE LQR!
+--Could optimize filter params with linear method to minimize residual? PROB DON'T CARE
 *Test reading pendulum simultaneously
 
 NOTES
