@@ -139,7 +139,7 @@ class PendulumAnalyzer:
 
 
     # ---------------------------------------------------------------------------
-    # Method 1: derivative-based, linear least squares (with bounds via least_squares)
+    # Fitting helpers
     # ---------------------------------------------------------------------------
 
     def _implement_filtfilt(self, signal, order = 2, cutoff_hz = 100, fs = 1000):
@@ -155,7 +155,40 @@ class PendulumAnalyzer:
             cur_pos = (self.data["pend_pos"])[start:end]
             self.runs.append((cur_t, cur_pos))
 
+    def test_fit(self, J, b, mgl):
+        """ For each run, copmare actual to forward simulation """
+        self._generate_runs()
+        for t, theta in self.runs:
 
+            # Forward simulation
+            theta_sim = self.simulate_theta(t, theta[0], 0.0, J, b, mgl)
+
+            # Compare to actual
+            residuals = (theta_sim - theta)**2
+
+            # Plot
+            fig, axs = plt.subplots(2,1, figsize=(10,6), sharex = True)
+            axs[0].plot(t, theta, label = "Measured")
+            axs[0].plot(t, theta_sim, label = "Predicted")
+            axs[0].set_ylabel("Position (rad)")
+            axs[0].set_title("Linear Method Evaluation")
+            axs[0].legend()
+            axs[0].grid(True, alpha=0.3)
+    
+            # Velocity
+            axs[1].plot(t, residuals, linewidth=1, marker = ".", color = "green", label = "Square Error")
+            axs[1].set_ylabel("Residual (rad^2)")
+            axs[1].set_xlabel("Time (s)")
+            axs[1].legend()
+            axs[1].grid(True, alpha=0.3)
+    
+            fig.tight_layout()
+    
+            plt.show()
+
+    # ---------------------------------------------------------------------------
+    # Method 1: derivative-based, linear least squares (with bounds via least_squares)
+    # ---------------------------------------------------------------------------
     def fit_linear(self, mgl, debug = True):
         """
         Uses numerical diff and filtering to get omega and alpha.
@@ -203,57 +236,27 @@ class PendulumAnalyzer:
         result = least_squares(residuals, x0, jac=jac, bounds=([1e-12, 0], [np.inf, np.inf]))
         return result
 
-    def test_linear_fit(self, J, b, mgl):
-        """ For each run, copmare actual to forward simulation """
-        self._generate_runs()
-        for t, theta in self.runs:
-
-            # Forward simulation
-            theta_sim = self.simulate_theta(t, theta[0], 0.0, J, b, mgl)
-
-            # Compare to actual
-            residuals = (theta_sim - theta)**2
-
-            # Plot
-            fig, axs = plt.subplots(2,1, figsize=(10,6), sharex = True)
-            axs[0].plot(t, theta, label = "Measured")
-            axs[0].plot(t, theta_sim, label = "Predicted")
-            axs[0].set_ylabel("Position (rad)")
-            axs[0].set_title("Linear Method Evaluation")
-            axs[0].legend()
-            axs[0].grid(True, alpha=0.3)
-    
-            # Velocity
-            axs[1].plot(t, residuals, linewidth=1, marker = ".", color = "green", label = "Square Error")
-            axs[1].set_ylabel("Residual (rad^2)")
-            axs[1].set_xlabel("Time (s)")
-            axs[1].legend()
-            axs[1].grid(True, alpha=0.3)
-    
-            fig.tight_layout()
-    
-            plt.show()
-
-
-
     # ---------------------------------------------------------------------------
     # Method 2: forward-simulation (RK4) + nonlinear least squares
     # ---------------------------------------------------------------------------
 
-    def fit_nonlinear(runs, mgl, J0, b0, omega0=0.0):
+    def fit_nonlinear(self, mgl, J0, b0, omega0=0.0):
         """
-        runs: list of (t, theta) arrays, one per run. Sampling need NOT be uniform.
+        mgl: known gravity term
+        J0: initial inertia guess
+        b0: initial damping guess
         omega0: initial angular velocity for every run (0.0 for lift-and-drop-from-rest).
                 Pass a list instead if release velocity varies run to run.
         """
-        N = len(runs)
+        self._generate_runs()
+        N = len(self.runs)
         omega0_list = omega0 if hasattr(omega0, "__len__") else [omega0] * N
 
         def residuals(params):
             J, b = params
             res = []
-            for (t, theta), w0 in zip(runs, omega0_list):
-                sim = simulate_theta(t, theta[0], w0, J, b, mgl)
+            for (t, theta), w0 in zip(self.runs, omega0_list):
+                sim = self.simulate_theta(t, theta[0], w0, J, b, mgl)
                 res.append(sim - theta)
             return np.concatenate(res)
 
@@ -263,6 +266,7 @@ class PendulumAnalyzer:
             method="trf",
             loss="soft_l1",   # mild robustness to outlier samples/glitches; use 'linear' for plain LS
             x_scale=[max(J0, 1e-9), max(b0, 1e-9)],  # helps scipy when J and b have very different magnitudes
+            verbose=2,
         )
         return result
 
@@ -278,40 +282,26 @@ if __name__ == "__main__":
     analyzer = PendulumAnalyzer(pend_log)
     analyzer.add_startpoints([10.364, 25.072, 42.481, 55.682, 71.790, 88.580, 102.856, 117.666, 133.164, 149.647, 168.993, 186.630, 207.018, 233.207, 253.556])
     #analyzer.add_startpoints([10.364])
-    analyzer.plot_raw()
+    #analyzer.plot_raw()
 
     m = 38.03/1000.0  # [kg]
     g = 9.81  # [m/s^2]
     l = (77.171 - 30.0)/1000.0  # [m]
+
+    # Linear fit
     linear_fit = analyzer.fit_linear(mgl=(m*g*l), debug=False)
 
     J_fit, b_fit = linear_fit.x
     print(f"Result of Linear Method: J = {J_fit}, b = {b_fit}")
 
-    analyzer.test_linear_fit(J_fit, b_fit, (m*g*l))
-    
-    # rng = np.random.default_rng(0)
+    #analyzer.test_fit(J_fit, b_fit, (m*g*l))
 
-    # # --- "true" system, used only to generate fake test data ---
-    # J_true, b_true, mgl = 4.2e-4, 8.5e-5, 0.0165
-    # dt = 1.0 / 500.0          # 500 Hz encoder
-    # t_run = np.arange(0, 3.0, dt)
-    # theta0_list = [0.9, 0.6, 1.3, 0.4]  # different drop angles = different runs
+    print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
 
-    # runs = []
-    # for theta0 in theta0_list:
-    #     theta_true = simulate_theta(t_run, theta0, 0.0, J_true, b_true, mgl)
-    #     noise = rng.normal(0, 0.001, size=theta_true.shape)  # encoder/quantization noise
-    #     runs.append((t_run.copy(), theta_true + noise))
+    # Non-linear fit
+    nonlinear_fit = analyzer.fit_nonlinear((m*g*l), 1e-4, 1e-4, 0.0)
 
-    # print(f"true J = {J_true:.6e}, true b = {b_true:.6e}\n")
+    J_n_fit, b_n_fit = nonlinear_fit.x
+    print(f"Result of NON-Linear Method: J = {J_n_fit}, b = {b_n_fit}")
 
-    # res1 = fit_method1(runs, mgl)
-    # print("Method 1 (derivative-based, linear LS):")
-    # print(f"  J = {res1.x[0]:.6e}, b = {res1.x[1]:.6e}")
-    # print(f"  cost = {res1.cost:.6e}\n")
-
-    # res2 = fit_method2(runs, mgl, J0=1e-4, b0=1e-4)
-    # print("Method 2 (RK4 forward-simulation, nonlinear LS):")
-    # print(f"  J = {res2.x[0]:.6e}, b = {res2.x[1]:.6e}")
-    # print(f"  cost = {res2.cost:.6e}")
+    analyzer.test_fit(J_n_fit, b_n_fit, (m*g*l))
