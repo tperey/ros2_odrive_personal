@@ -67,7 +67,29 @@ void onTorques(Get_Torques_msg_t& msg, void* user_data) {
   odrv_user_data->received_torques = true;
 }
 
+// ARBITRARY PARAMETER RESPONSE HANDLING
+struct ParamResponse {
+  uint16_t endpoint_id = 0;
+  uint8_t  raw[4] = {0};
+};
+static ParamResponse odrv0_param_response;
+static volatile bool odrv0_param_response_valid = false;
+
+void checkOdrv0ParamRequest(const CanMsg& msg) {
+  uint8_t node_id = msg.id >> NODE_ID_SHIFT;
+  uint8_t cmd_id  = msg.id & CMD_ID_SELECTOR;
+
+  // Catch arbitrary-parameter read replies ourselves; the ODriveCAN
+  // library has no registered callback slot for TxSdo.
+  if (cmd_id == CMD_TXSDO && node_id == ODRV0_NODE_ID && msg.len >= 8) {
+    odrv0_param_response.endpoint_id = msg.buf[1] | (msg.buf[2] << 8); // Reconstruct little endian to 16 bit id
+    memcpy(odrv0_param_response.raw, &msg.buf[4], sizeof(odrv0_param_response.raw)); // Copy data (BIT 4 on)
+    odrv0_param_response_valid = true;
+  }
+}
+
 void onCanMessage(const CanMsg& msg) {
+  checkOdrv0ParamRequest(msg);
   for (uint8_t i = 0; i < n_drives; ++i) {
     ODriveCAN* odrive = odrives[i];
     onReceive(msg, *odrive);
@@ -130,6 +152,7 @@ void load_anticogging_config(const float* cogging_map, float cogging_percentage,
 
 // GENERAL
 bool started = false;
+bool pos_init = false;
 void initialize_singleODCW(uint8_t n_drives_, uint32_t baud_rate_) {
 
   /* SET GLOBAL VARS */
@@ -186,7 +209,31 @@ void initialize_singleODCW(uint8_t n_drives_, uint32_t baud_rate_) {
   Serial.print("DC current [A]: ");
   Serial.println(vbus.Bus_Current);
 
-  odrv0.setAbsolutePosition(HOMED_STARTING_POS_ESTIMATE); // Zero starting position
+  // Set start-up position
+  //odrv0.setAbsolutePosition(HOMED_STARTING_POS_ESTIMATE); // Zero starting position
+  // Using absolute encoder
+  while (!pos_init) {
+    // Follow pattern below, i.e. transmit request for initial position, then wait for 150 ms.
+    requestParamRead(ODRV0_NODE_ID, ONBOARD_ENCODER0_RAW);
+    for (int i=0; i < 15; i++) {
+      delay(10);
+      pumpEvents(can_intf);
+    } 
+
+    // Repeat until get startup position, then initialize
+    if (odrv0_param_response_valid) {
+      float init_pos = 0;
+      memcpy(&init_pos, odrv0_param_response.raw, sizeof(init_pos));
+      
+      odrv0.setAbsolutePosition(init_pos);
+      
+      pos_init = true;
+      odrv0_param_response_valid = false; // Reset
+
+      Serial.print("Position initialized to ");
+      Serial.println(init_pos);
+    }
+  }
 
   Serial.println("Enabling closed loop control...");
   while (odrv0_user_data.last_heartbeat.Axis_State != ODriveAxisState::AXIS_STATE_CLOSED_LOOP_CONTROL) {

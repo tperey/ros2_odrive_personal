@@ -15,10 +15,15 @@
 
 #define M8325S_TORQUE_CONSTANT 0.083  // [N-m/A]
 
+// Arbitrary parameter access
+#define NODE_ID_SHIFT 5
+#define CMD_ID_SELECTOR 0x1F
 #define CMD_RXSDO 0x04
 #define CMD_TXSDO 0x05
 #define OPCODE_READ 0x00
 #define OPCODE_WRITE 0x01
+#define ONBOARD_ENCODER0_RAW 625  // ID for CAN msg. Assumes FW version 0.6.12-1
+
 #define HOMED_STARTING_POS_ESTIMATE 0.3632275462150574  // What pos_estimate set to by Teensy on connection. Assumes manually homed.
 // TODO: rather than manual, use startup absolute position
 #define ENCODER_COUNTS_PER_REV 4096
