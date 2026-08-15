@@ -338,6 +338,19 @@ if __name__=="__main__":
     J2yy = 0.000250 # [kg-m2] #(1/12.0)*m2*(L2**2)
     print(J2yy)
     J2zz = J2yy
+    """ FROM PENDULUM SID """
+    # Result of Nonlinear method WITH FRICTION:
+    # J = 0.00018521150225733505, 
+    # b = 4.7119117016132644e-05, 
+    # fs = 0.00036617682092614115
+    # Used k = 10 for the tanh. Fit was crazy good.
+    # But you won't have static friction in your model...
+    # 
+    # Result of NON-Linear Method:
+    # J = 0.0001889800974579493,
+    # b = 9.363519007953678e-05
+    # Fit not quite as good, but probably better to use this b if you are dropping static friction
+    # This b will capture some of the effects of static friction, as opposed to drastically underestimating
     simulateFurata = FurataPendulum(dt, m1, l1, L1, J1xx, J1yy, J1zz, m2, l2, L2, J2xx, J2yy, J2zz, b1, b2)
     
     t20 = random.uniform(-0.1, 0.1)

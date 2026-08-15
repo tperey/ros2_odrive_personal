@@ -270,6 +270,99 @@ class PendulumAnalyzer:
         )
         return result
 
+    # ---------------------------------------------------------------------------
+    # Method 3: forward-simulation (RK4) with coulombic friction + nonlinear least squares
+    # ---------------------------------------------------------------------------
+    def pendulum_fs_rhs(self, state, J, b, mgl, f_s, k):
+        """ Deriv of state """
+        theta, omega = state
+        dtheta = omega
+        domega = -(b * omega + mgl * np.sin(theta) + f_s * np.tanh(k*omega)) / J
+        return np.array([dtheta, domega])
+
+
+    def rk4_fs_step(self, state, dt, J, b, mgl, f_s, k):
+        k1 = self.pendulum_fs_rhs(state, J, b, mgl, f_s, k)
+        k2 = self.pendulum_fs_rhs(state + 0.5 * dt * k1, J, b, mgl, f_s, k)
+        k3 = self.pendulum_fs_rhs(state + 0.5 * dt * k2, J, b, mgl, f_s, k)
+        k4 = self.pendulum_fs_rhs(state + dt * k3, J, b, mgl, f_s, k)
+        return state + (dt / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)
+
+
+    def simulate_fs_theta(self, t, theta0, omega0, J, b, mgl, f_s, k):
+        """RK4-integrate theta(t) at the exact (possibly non-uniform) sample times in t."""
+        state = np.array([theta0, omega0], dtype=float)
+        out = np.empty(len(t))
+        out[0] = state[0]
+        for i in range(len(t) - 1):
+            dt = t[i + 1] - t[i]
+            state = self.rk4_fs_step(state, dt, J, b, mgl, f_s, k)
+            out[i + 1] = state[0]
+        return out
+
+    def fit_fs_nonlinear(self, mgl, J0, b0, fs0, omega0=0.0, k=10):
+        """
+        mgl: known gravity term
+        J0: initial inertia guess
+        b0: initial damping guess
+        fs0: initial coulombic friction guess
+        omega0: initial angular velocity for every run (0.0 for lift-and-drop-from-rest).
+                Pass a list instead if release velocity varies run to run.
+        k: factor to use for tanh. NOT learned. Functionally a hyperparameter
+        """
+        self._generate_runs()
+        N = len(self.runs)
+        omega0_list = omega0 if hasattr(omega0, "__len__") else [omega0] * N
+
+        def residuals(params):
+            J, b, fs = params
+            res = []
+            for (t, theta), w0 in zip(self.runs, omega0_list):
+                sim = self.simulate_fs_theta(t, theta[0], w0, J, b, mgl, fs, k)
+                res.append(sim - theta)
+            return np.concatenate(res)
+
+        result = least_squares(
+            residuals, x0=[J0, b0, fs0],
+            bounds=([1e-12, 0, 0], [np.inf, np.inf, np.inf]),
+            method="trf",
+            loss="soft_l1",   # mild robustness to outlier samples/glitches; use 'linear' for plain LS
+            x_scale=[max(J0, 1e-9), max(b0, 1e-9), max(fs0, 1e-9)],  # helps scipy when J and b have very different magnitudes
+            verbose=2,
+        )
+        return result
+
+    def test_fs_fit(self, J, b, mgl, f_s, k = 10):
+        """ For each run, copmare actual to forward simulation """
+        self._generate_runs()
+        for t, theta in self.runs:
+
+            # Forward simulation
+            theta_sim = self.simulate_fs_theta(t, theta[0], 0.0, J, b, mgl, f_s, k)
+
+            # Compare to actual
+            residuals = (theta_sim - theta)**2
+
+            # Plot
+            fig, axs = plt.subplots(2,1, figsize=(10,6), sharex = True)
+            axs[0].plot(t, theta, label = "Measured")
+            axs[0].plot(t, theta_sim, label = "Predicted")
+            axs[0].set_ylabel("Position (rad)")
+            axs[0].set_title("Linear Method Evaluation")
+            axs[0].legend()
+            axs[0].grid(True, alpha=0.3)
+    
+            # Velocity
+            axs[1].plot(t, residuals, linewidth=1, marker = ".", color = "green", label = "Square Error")
+            axs[1].set_ylabel("Residual (rad^2)")
+            axs[1].set_xlabel("Time (s)")
+            axs[1].legend()
+            axs[1].grid(True, alpha=0.3)
+    
+            fig.tight_layout()
+    
+            plt.show()
+
 
 # ---------------------------------------------------------------------------
 # Fit dat data
@@ -298,10 +391,21 @@ if __name__ == "__main__":
 
     print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
 
-    # Non-linear fit
+    """ Non-linear fit """
     nonlinear_fit = analyzer.fit_nonlinear((m*g*l), 1e-4, 1e-4, 0.0)
 
     J_n_fit, b_n_fit = nonlinear_fit.x
     print(f"Result of NON-Linear Method: J = {J_n_fit}, b = {b_n_fit}")
 
     analyzer.test_fit(J_n_fit, b_n_fit, (m*g*l))
+
+    print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
+
+    """ Non-linear fit, with friction """
+    # k_to_use = 10
+    # fs_nonlinear_fit = analyzer.fit_fs_nonlinear((m*g*l), 1e-4, 1e-4, 0.001, 0.0, k_to_use)
+
+    # Jnfs_fit, bnfs_fit, fs_fit = fs_nonlinear_fit.x
+    # print(f"Result of Nonlinear method WITH FRICTION: J = {Jnfs_fit}, b = {bnfs_fit}, fs = {fs_fit}")
+
+    # analyzer.test_fs_fit(Jnfs_fit, bnfs_fit, (m*g*l), fs_fit, k_to_use)
