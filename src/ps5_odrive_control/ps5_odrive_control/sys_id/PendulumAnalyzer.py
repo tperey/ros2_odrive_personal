@@ -272,7 +272,7 @@ class PendulumAnalyzer:
 
 
 # ---------------------------------------------------------------------------
-# Self-test on synthetic data (replace `runs` below with your real data)
+# Fit dat data
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
