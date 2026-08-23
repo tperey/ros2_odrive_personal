@@ -740,7 +740,6 @@ bool perform_sid_with_pend_sinetorque(OdriveSinusoidTorqueSID cur_st_sid, AccelK
 bool perform_linear_position_sid(OdriveLinearPositionSID cur_lp_sid) {
 
   // Initialize
-  odrv0.setAbsolutePosition(0.0); // Zero start position for easy cogging map generation
   odrv0.setPosGain(200.0);
   odrv0.setControllerMode(ODriveControlMode::CONTROL_MODE_POSITION_CONTROL, ODriveInputMode::INPUT_MODE_PASSTHROUGH);
 
@@ -759,7 +758,7 @@ bool perform_linear_position_sid(OdriveLinearPositionSID cur_lp_sid) {
     uint32_t now = micros();
     if ( (now - t_prev) > 1000) {
       if (is_rising) {
-        pos_setpoint = (cur_lp_sid.vel)*phase_t;
+        pos_setpoint = (cur_lp_sid.vel)*phase_t + initial_position;
 
         odrv0.setPosition(
           pos_setpoint
@@ -774,7 +773,7 @@ bool perform_linear_position_sid(OdriveLinearPositionSID cur_lp_sid) {
         }
 
       } else {
-        pos_setpoint = fall_start_pos - (cur_lp_sid.vel)*phase_t;
+        pos_setpoint = fall_start_pos - (cur_lp_sid.vel)*phase_t + initial_position;
 
         odrv0.setPosition(
           pos_setpoint
