@@ -23,6 +23,7 @@ void loop() {
             cur_count = command_odrv0_torque(0.0);  // Command oNLY feedforward to test smoothness
             sendTelemetry_singleODCW(cur_count); // Send telemetry
             status_ok = check_for_shutdown_msg();
+            t_prev = now;
         }
     }
 }

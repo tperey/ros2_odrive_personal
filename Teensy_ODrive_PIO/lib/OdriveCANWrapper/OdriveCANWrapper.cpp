@@ -169,6 +169,7 @@ void load_anticogging_config(const float* cogging_map, float cogging_percentage,
     friction_offset = friction;
     percent_antifriction = friction_percentage;
   }
+  doFeedforward = true;
 }
 
 // GENERAL
@@ -773,7 +774,7 @@ bool perform_linear_position_sid(OdriveLinearPositionSID cur_lp_sid) {
         }
 
       } else {
-        pos_setpoint = fall_start_pos - (cur_lp_sid.vel)*phase_t + initial_position;
+        pos_setpoint = fall_start_pos - (cur_lp_sid.vel)*phase_t; // No need to add initial, already captured in fall_start_pos
 
         odrv0.setPosition(
           pos_setpoint
