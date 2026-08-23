@@ -22,7 +22,7 @@
 #define CMD_TXSDO 0x05
 #define OPCODE_READ 0x00
 #define OPCODE_WRITE 0x01
-#define ONBOARD_ENCODER0_RAW 625  // ID for CAN msg. Assumes FW version 0.6.12-1
+#define ONBOARD_ENCODER0_RAW 598  // ID for CAN msg. Assumes FW version 0.6.11 (on my S1 as of 2026-08-22)
 
 #define HOMED_STARTING_POS_ESTIMATE 0.3632275462150574  // What pos_estimate set to by Teensy on connection. Assumes manually homed.
 // TODO: rather than manual, use startup absolute position

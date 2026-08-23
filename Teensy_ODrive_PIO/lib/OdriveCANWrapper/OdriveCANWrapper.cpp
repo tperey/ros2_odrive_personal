@@ -75,12 +75,33 @@ struct ParamResponse {
 static ParamResponse odrv0_param_response;
 static volatile bool odrv0_param_response_valid = false;
 
-void checkOdrv0ParamRequest(const CanMsg& msg) {
+void debug_CAN_msg(const CanMsg& msg) {
   uint8_t node_id = msg.id >> NODE_ID_SHIFT;
   uint8_t cmd_id  = msg.id & CMD_ID_SELECTOR;
 
   // Catch arbitrary-parameter read replies ourselves; the ODriveCAN
   // library has no registered callback slot for TxSdo.
+  Serial.print("CAN msg id=0x");
+  Serial.print(msg.id, HEX);
+  Serial.print(" node_id=");
+  Serial.print(node_id);
+  Serial.print(" cmd_id=0x");
+  Serial.print(cmd_id, HEX);
+  Serial.print(" len=");
+  Serial.print(msg.len);
+  Serial.print(" data=[");
+  for (int i = 0; i < msg.len; i++) {
+    if (msg.buf[i] < 0x10) Serial.print("0");
+    Serial.print(msg.buf[i], HEX);
+    if (i < msg.len - 1) Serial.print(" ");
+  }
+  Serial.println("]");
+}
+
+void checkOdrv0ParamRequest(const CanMsg& msg) {
+  uint8_t node_id = msg.id >> NODE_ID_SHIFT;
+  uint8_t cmd_id  = msg.id & CMD_ID_SELECTOR;
+
   if (cmd_id == CMD_TXSDO && node_id == ODRV0_NODE_ID && msg.len >= 8) {
     odrv0_param_response.endpoint_id = msg.buf[1] | (msg.buf[2] << 8); // Reconstruct little endian to 16 bit id
     memcpy(odrv0_param_response.raw, &msg.buf[4], sizeof(odrv0_param_response.raw)); // Copy data (BIT 4 on)
@@ -153,6 +174,7 @@ void load_anticogging_config(const float* cogging_map, float cogging_percentage,
 // GENERAL
 bool started = false;
 bool pos_init = false;
+float initial_position = 0.0;
 void initialize_singleODCW(uint8_t n_drives_, uint32_t baud_rate_) {
 
   /* SET GLOBAL VARS */
@@ -224,6 +246,7 @@ void initialize_singleODCW(uint8_t n_drives_, uint32_t baud_rate_) {
     if (odrv0_param_response_valid) {
       float init_pos = 0;
       memcpy(&init_pos, odrv0_param_response.raw, sizeof(init_pos));
+      init_pos -= 1.0;  // Get corresponding start position which is POSITIVE in the telemetry frame
       
       odrv0.setAbsolutePosition(init_pos);
       
@@ -232,6 +255,7 @@ void initialize_singleODCW(uint8_t n_drives_, uint32_t baud_rate_) {
 
       Serial.print("Position initialized to ");
       Serial.println(init_pos);
+      initial_position = init_pos;  // Store in global, in case needed elsewhere
     }
   }
 
@@ -787,7 +811,6 @@ float command_odrv0_torque(float tau_setpoint) {
   // Set control mode on first call
   static bool is_first = true;
   if (is_first) {
-    odrv0.setAbsolutePosition(0.0); // Cogging relies on manual home to zero.
     odrv0.setControllerMode(ODriveControlMode::CONTROL_MODE_TORQUE_CONTROL, ODriveInputMode::INPUT_MODE_PASSTHROUGH);
     is_first = false;
   }
