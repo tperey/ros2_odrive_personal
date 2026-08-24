@@ -24,7 +24,7 @@ import numpy as np
 from scipy.stats import norm, normaltest
 import sys
 
-COUNTS_PER_REV = 4096 #1024
+COUNTS_PER_REV = 1024 #4096
 
 class CoggingAnalyzer:
     def __init__(self, log_path, config_path, header_path):
@@ -41,6 +41,7 @@ class CoggingAnalyzer:
         self.time = self.data.get("time")
 
         # Post process
+        self.init_pos = 0.0
         self._postprocess()
 
     """ GENERAL """
@@ -84,6 +85,10 @@ class CoggingAnalyzer:
         fig.tight_layout()
 
     def _postprocess(self, testPlot = False, vel_thresh = 0.03):
+        # Capture and remove initial position, otherwise 
+        self.init_pos = np.array(self.data["pos"])[0]
+        # DON'T subtract out. Then cogging map is ALREADY set relative to the absolute zero. As will be your motor on start-up.6
+
         # Parse directions
         self._vel_cmd = np.diff(np.array(self.data["cmd"]))*1000 #[rev/ms] * [1000 ms/s] = rev/s
         self._vel_cmd = np.insert(self._vel_cmd, 0, 0)
@@ -260,6 +265,7 @@ class CoggingAnalyzer:
         with open(header_file, "w") as f:
             f.write("#pragma once\n\n")
             f.write("namespace CoggingConfig {\n\n")
+            f.write(f"constexpr float cogging_start_pos = {self.init_pos:.4f};\n\n")
             f.write(f"constexpr float cogging_friction = {friction:.4f};\n\n")
             f.write("constexpr int kNumEncoderCounts = 4096;\n")
             f.write("constexpr float cogging_map[kNumEncoderCounts] = {\n")
@@ -279,15 +285,14 @@ class CoggingAnalyzer:
 
         print(f"Wrote {self.header_path}")
 
-
         
 if __name__ == "__main__":
     base_path = "/Users/trevorperey/Desktop/PersonalProjects/ros2_odrive_personal/"
-    cog_log = base_path + "src/ps5_odrive_control/ps5_odrive_control/logs/cogging_personal_001/logs_20260720_203053.pkl"
+    cog_log = base_path + "src/ps5_odrive_control/ps5_odrive_control/logs/cogging_personal_002/logs_20260823_075437.pkl"
     config_path = base_path + "config/m8325s_furata/"
     header_path = base_path + "Teensy_ODrive_PIO/lib/config/m8325s_furata/"
     mt = CoggingAnalyzer(cog_log, config_path, header_path)
     mt.plot_tau_pos()
     mt.analyze_tauc_vs_count()
-    #plt.show()
+    plt.show()
     mt.output_configs()
