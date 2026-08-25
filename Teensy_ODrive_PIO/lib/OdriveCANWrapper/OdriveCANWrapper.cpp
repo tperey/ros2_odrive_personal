@@ -604,7 +604,7 @@ void perform_linear_torque_sid(OdriveLinearTorqueSID cur_lt_sid) {
 
 // Sinusoidal torque sysid
 #define PAUSE_TIME 2.5 // [s]
-bool perform_sinusoidal_torque_sid(OdriveSinusoidTorqueSID cur_st_sid) {
+bool perform_sinusoidal_torque_sid(OdriveSinusoidTorqueSID cur_st_sid, bool deCog) {
 
   // Initialize
   start_motor_single();
@@ -643,7 +643,11 @@ bool perform_sinusoidal_torque_sid(OdriveSinusoidTorqueSID cur_st_sid) {
           is_cycling = false;
           t0 = 0.001*millis(); 
         } else {
-          odrv0.setTorque(tau_setpoint);
+          if (deCog) {
+            command_odrv0_torque(tau_setpoint);
+          } else { 
+            odrv0.setTorque(tau_setpoint);
+          }
         }
 
       } else {
