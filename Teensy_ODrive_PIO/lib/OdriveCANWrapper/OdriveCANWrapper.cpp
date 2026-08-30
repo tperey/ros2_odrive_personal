@@ -670,7 +670,79 @@ bool perform_sinusoidal_torque_sid(OdriveSinusoidTorqueSID cur_st_sid, bool deCo
   return status_ok;
 }
 
-/* With Encoder, Sinusoidal Torque*/
+bool perform_step_torque_sid(OdriveStepTorqueSID cur_st_sid, bool deCog) {
+  // Initialize
+  start_motor_single();
+  odrv0.setControllerMode(ODriveControlMode::CONTROL_MODE_TORQUE_CONTROL, ODriveInputMode::INPUT_MODE_PASSTHROUGH);
+  float t0 = 0.001*millis(); // [s]
+  uint32_t cycle_n = 0;
+  float period = 1.0/cur_st_sid.freq; // [s]
+  bool is_cycling = true;
+  bool is_high = true;
+  bool pause_on = true;
+  uint32_t t_prev = micros();
+  bool status_ok = true;  // Used to allow stop in logger
+
+  while ((pause_on) && (status_ok)) {
+    float tau_setpoint = 0.0;  // [N-m]
+    float phase_t = 0.001*millis() - t0;  // [s]
+
+    // Enforce 1 kHz cycle
+    uint32_t now = micros();
+    if ( (now - t_prev) > 1000) {
+      if (is_cycling) {
+
+        // Compute step torque
+        if (is_high) {
+          tau_setpoint = cur_st_sid.amp;
+        } else {
+          tau_setpoint = -cur_st_sid.amp;
+        }
+
+        // Check for cycle, using lead frequency
+        float cycle_fraction = cur_st_sid.freq*phase_t;  // Num cycles, with decimals
+        if ((cycle_fraction - float(cycle_n)) > 0.5) {
+          is_high = false; // At high cycle, flip direction of step
+        } else if ((cycle_fraction - float(cycle_n)) > 1.0) {
+          cycle_n++; // If fraction > 1.0 above cycle_n, a cycle has occurred
+          is_high = true; // Reset direction of step
+        }
+
+        // Check for end
+        if (cycle_n > cur_st_sid.cycle) {
+          odrv0.setTorque(0.0);
+          stop_motor_single(); // Necessary, otherwise cogging comp keeps it moving
+          is_cycling = false;
+          t0 = 0.001*millis(); 
+        } else {
+          if (deCog) {
+            command_odrv0_torque(tau_setpoint);
+          } else { 
+            odrv0.setTorque(tau_setpoint);
+          }
+        }
+
+      } else {
+        if (phase_t > PAUSE_TIME) {
+          // Cause break and return
+          pause_on = false; 
+        }
+      }
+
+      // Per 1 kHz actions
+      sendTelemetry_singleODCW(tau_setpoint);
+      status_ok = check_for_shutdown_msg();
+      t_prev = now;
+    }
+  }
+
+  // At the end, ensure shutdown
+  stop_motor_single();
+
+  return status_ok;
+}
+
+/* With Encoder */
 bool perform_sid_with_pend_sinetorque(OdriveSinusoidTorqueSID cur_st_sid, AccelKF* thisKF, Encoder* thisEncoder, float rad_per_pulse) {
 
   // Initialize

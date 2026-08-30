@@ -46,6 +46,13 @@ struct OdriveSinusoidTorqueSID {
     uint8_t n_components = 0;
 };
 
+// Step torque sys id input
+struct OdriveStepTorqueSID {
+    float amp;
+    float freq;
+    uint32_t cycle;
+};
+
 // Linear POSITION sys id input
 struct OdriveLinearPositionSID {
     float vel = 0.05; // [rev/s];
@@ -59,6 +66,7 @@ bool simplesine_pos_singleODCW();
 bool simplesine_tau_singleODCW();
 void perform_linear_torque_sid(OdriveLinearTorqueSID cur_lt_sid);
 bool perform_sinusoidal_torque_sid(OdriveSinusoidTorqueSID cur_st_sid, bool deCog = false);
+bool perform_step_torque_sid(OdriveStepTorqueSID cur_st_sid, bool deCog = false);
 bool perform_sid_with_pend_sinetorque(OdriveSinusoidTorqueSID cur_st_sid, AccelKF* thisKF, Encoder* thisEncoder, float rad_per_pulse); // With pendulum
 bool perform_linear_position_sid(OdriveLinearPositionSID cur_lp_sid);  // Likely most useful for personal cogging, so should turn Odrive's off
 
