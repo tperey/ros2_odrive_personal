@@ -36,7 +36,8 @@ class LoggerNode(Node):
                  topic='telemetry_teensy',
                  log_path='logs',
                  logTime = False,
-                 inclPendulum = False):
+                 inclPendulum = False,
+                 saveLog = False):
         super().__init__("logger")
 
         # Pendulum
@@ -83,6 +84,7 @@ class LoggerNode(Node):
         self.reader_thread.start()
 
         # Logging
+        self._saveLog = saveLog
         self._buf = bytearray()
         self.create_timer(0.005, self._process_serial_buffer)  # Timer for parsing read serial data
         self.log_dict = {
@@ -259,86 +261,87 @@ class LoggerNode(Node):
         Args:
             save_dir: Directory to save data and plots
         """
-        # Convert to numpy arrays for plotting
-        t = np.array(self.log_dict['time'])
-        t = (t - t[0])/1000  # Convert from ms to s, and subtract start
-        pos = np.array(self.log_dict['pos'])
-        vel = np.array(self.log_dict['vel'])
-        iq_set = np.array(self.log_dict['iq_set'])
-        iq_act = np.array(self.log_dict['iq_act'])
-        tau_set = np.array(self.log_dict['tau_set'])
-        tau_act = np.array(self.log_dict['tau_act'])
-        cmd = np.array(self.log_dict['cmd'])
+        if self._saveLog:
+            # Convert to numpy arrays for plotting
+            t = np.array(self.log_dict['time'])
+            t = (t - t[0])/1000  # Convert from ms to s, and subtract start
+            pos = np.array(self.log_dict['pos'])
+            vel = np.array(self.log_dict['vel'])
+            iq_set = np.array(self.log_dict['iq_set'])
+            iq_act = np.array(self.log_dict['iq_act'])
+            tau_set = np.array(self.log_dict['tau_set'])
+            tau_act = np.array(self.log_dict['tau_act'])
+            cmd = np.array(self.log_dict['cmd'])
 
-        # Create directory if it doesn't exist
-        os.makedirs(save_dir, exist_ok=True)
-        
-        # Generate timestamp for filenames
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
-        # Save data as pickle
-        data_filename = os.path.join(save_dir, f'logs_{timestamp}.pkl')
-        with open(data_filename, 'wb') as f:
-            pickle.dump(self.log_dict, f)
-        print(f"Data saved to: {data_filename}")
+            # Create directory if it doesn't exist
+            os.makedirs(save_dir, exist_ok=True)
+            
+            # Generate timestamp for filenames
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            
+            # Save data as pickle
+            data_filename = os.path.join(save_dir, f'logs_{timestamp}.pkl')
+            with open(data_filename, 'wb') as f:
+                pickle.dump(self.log_dict, f)
+            print(f"Data saved to: {data_filename}")
 
 
-        """ POSITION, VELOCITY, AND COMMAND """
-        # Create figure with subplots
-        fig, axes = plt.subplots(2, 1, figsize=(12, 6), sharex = True)
-        
-        # Plot 1: Position
-        axes[0].plot(t, pos, 'b-', linewidth=1.5, label='Position')
-        axes[0].plot(t, cmd, 'k--', linewidth=1.5, label='Position CMD')
-        axes[0].set_ylabel('Position (rad)', fontsize=12)
-        axes[0].set_xlabel('Time (s)', fontsize=12)
-        axes[0].grid(True, alpha=0.3)
-        axes[0].legend(loc='upper right')
-        axes[0].set_title('Logs', fontsize=14, fontweight='bold')
-        
-        # Plot 2: Velocity
-        axes[1].plot(t, vel, 'g-', linewidth=1.5, label='Velocity')
-        axes[1].set_ylabel('Velocity (rad/s)', fontsize=12)
-        axes[1].set_xlabel('Time (s)', fontsize=12)
-        axes[1].grid(True, alpha=0.3)
-        axes[1].legend(loc='upper right')
-        
-        # Save figure
-        plot_filename = os.path.join(save_dir, f'log_pvcplot_{timestamp}.png')
-        plt.savefig(plot_filename, dpi=300, bbox_inches='tight')
-        print(f"Plot saved to: {plot_filename}")
-        
-        # Show plot
-        plt.show()
+            """ POSITION, VELOCITY, AND COMMAND """
+            # Create figure with subplots
+            fig, axes = plt.subplots(2, 1, figsize=(12, 6), sharex = True)
+            
+            # Plot 1: Position
+            axes[0].plot(t, pos, 'b-', linewidth=1.5, label='Position')
+            axes[0].plot(t, cmd, 'k--', linewidth=1.5, label='Position CMD')
+            axes[0].set_ylabel('Position (rad)', fontsize=12)
+            axes[0].set_xlabel('Time (s)', fontsize=12)
+            axes[0].grid(True, alpha=0.3)
+            axes[0].legend(loc='upper right')
+            axes[0].set_title('Logs', fontsize=14, fontweight='bold')
+            
+            # Plot 2: Velocity
+            axes[1].plot(t, vel, 'g-', linewidth=1.5, label='Velocity')
+            axes[1].set_ylabel('Velocity (rad/s)', fontsize=12)
+            axes[1].set_xlabel('Time (s)', fontsize=12)
+            axes[1].grid(True, alpha=0.3)
+            axes[1].legend(loc='upper right')
+            
+            # Save figure
+            plot_filename = os.path.join(save_dir, f'log_pvcplot_{timestamp}.png')
+            plt.savefig(plot_filename, dpi=300, bbox_inches='tight')
+            print(f"Plot saved to: {plot_filename}")
+            
+            # Show plot
+            plt.show()
 
-        """ TORQUE AND CURRENT """
-        # Create figure with subplots
-        fig, axes = plt.subplots(2, 1, figsize=(12, 6), sharex = True)
-        
-        # Plot 1: Currents
-        axes[0].plot(t, iq_set, 'p-', linewidth=1.5, label='iq_set')
-        axes[0].plot(t, iq_act, 'r--', linewidth=1.5, label='iq_act')
-        axes[0].set_ylabel('Position (rad)', fontsize=12)
-        axes[0].set_xlabel('Time (s)', fontsize=12)
-        axes[0].grid(True, alpha=0.3)
-        axes[0].legend(loc='upper right')
-        axes[0].set_title('Logs', fontsize=14, fontweight='bold')
-        
-        # Plot 2: Tau
-        axes[1].plot(t, tau_set, 'g-', linewidth=1.5, label='tau_set')
-        axes[1].plot(t, tau_act, 'b--', linewidth=1.5, label='tau_act')
-        axes[1].set_ylabel('Velocity (rad/s)', fontsize=12)
-        axes[1].set_xlabel('Time (s)', fontsize=12)
-        axes[1].grid(True, alpha=0.3)
-        axes[1].legend(loc='upper right')
-        
-        # Save figure
-        plot_filename = os.path.join(save_dir, f'log_ctplot_{timestamp}.png')
-        plt.savefig(plot_filename, dpi=300, bbox_inches='tight')
-        print(f"Plot saved to: {plot_filename}")
-        
-        # Show plot
-        plt.show()
+            """ TORQUE AND CURRENT """
+            # Create figure with subplots
+            fig, axes = plt.subplots(2, 1, figsize=(12, 6), sharex = True)
+            
+            # Plot 1: Currents
+            axes[0].plot(t, iq_set, 'p-', linewidth=1.5, label='iq_set')
+            axes[0].plot(t, iq_act, 'r--', linewidth=1.5, label='iq_act')
+            axes[0].set_ylabel('Position (rad)', fontsize=12)
+            axes[0].set_xlabel('Time (s)', fontsize=12)
+            axes[0].grid(True, alpha=0.3)
+            axes[0].legend(loc='upper right')
+            axes[0].set_title('Logs', fontsize=14, fontweight='bold')
+            
+            # Plot 2: Tau
+            axes[1].plot(t, tau_set, 'g-', linewidth=1.5, label='tau_set')
+            axes[1].plot(t, tau_act, 'b--', linewidth=1.5, label='tau_act')
+            axes[1].set_ylabel('Velocity (rad/s)', fontsize=12)
+            axes[1].set_xlabel('Time (s)', fontsize=12)
+            axes[1].grid(True, alpha=0.3)
+            axes[1].legend(loc='upper right')
+            
+            # Save figure
+            plot_filename = os.path.join(save_dir, f'log_ctplot_{timestamp}.png')
+            plt.savefig(plot_filename, dpi=300, bbox_inches='tight')
+            print(f"Plot saved to: {plot_filename}")
+            
+            # Show plot
+            plt.show()
     
 
     """ SAFE SHUTDOWN """
@@ -350,13 +353,15 @@ def main(args=None):
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--pend', action='store_true', help='Include pendulum data in packet')
+    parser.add_argument('--save_log', action='store_true', help='Save log as pngs and pkl.')
     parsed, _ = parser.parse_known_args()  # parse_known_args avoids clashing with ROS args
 
     node = LoggerNode(
         baud=115200,
         topic='telemetry_teensy',
         logTime=True,
-        inclPendulum=parsed.pend
+        inclPendulum=parsed.pend,
+        saveLog=parsed.save_log
     )
 
     try:
