@@ -3,6 +3,8 @@
 #include <AccelKF.hpp>
 #include <Encoder.h>
 
+#include <m8325s_furata/cogging_config.hpp>
+
 /* ENCODER SETUP */
 
 // Constants
@@ -36,7 +38,8 @@ float Pi[3][3] = { {0.01, 0.0, 0.0}, {0.0, 0.01, 0.0}, {0.0, 0.0, 0.01} };  // c
 AccelKF thisKF = AccelKF(xi[0], xi[1], xi[2], R, Q, dt, Pi);
 
 /* ODRIVE SETUP */
-#define SINE_TORQUE_BASE_AMP 0.11 // No Cogging
+#define ANTICOG_PERCENT_TO_USE 1.0 
+#define SINE_TORQUE_BASE_AMP 0.08 // Cogging //0.11 // No Cogging
 constexpr uint8_t n_runs = 12;
 OdriveSinusoidTorqueSID st_sid_runs[n_runs] = {
     // { {SINE_TORQUE_BASE_AMP}, {0.05}, 4, 1}, // Get static friciton data
@@ -70,6 +73,7 @@ void setup() {
 
     // Odrive setup
     initialize_singleODCW();
+    load_anticogging_config(CoggingConfig::cogging_map, ANTICOG_PERCENT_TO_USE, 0.0, 0.0);
 }
 
 void loop() {
@@ -77,7 +81,7 @@ void loop() {
         while (!status_ok) {
             // Infinite loop if stop msg received
         }
-        status_ok = perform_sid_with_pend_sinetorque(st_sid_runs[i], &thisKF, &furataEncoder, RAD_PER_PULSE);
+        status_ok = perform_sid_with_pend_sinetorque(st_sid_runs[i], &thisKF, &furataEncoder, RAD_PER_PULSE, true);
     }
     status_ok = false;
 }

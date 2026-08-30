@@ -741,7 +741,7 @@ bool perform_step_torque_sid(OdriveStepTorqueSID cur_st_sid, bool deCog) {
 }
 
 /* With Encoder */
-bool perform_sid_with_pend_sinetorque(OdriveSinusoidTorqueSID cur_st_sid, AccelKF* thisKF, Encoder* thisEncoder, float rad_per_pulse) {
+bool perform_sid_with_pend_sinetorque(OdriveSinusoidTorqueSID cur_st_sid, AccelKF* thisKF, Encoder* thisEncoder, float rad_per_pulse, bool deCog = false) {
 
   // Initialize
   start_motor_single();
@@ -781,7 +781,11 @@ bool perform_sid_with_pend_sinetorque(OdriveSinusoidTorqueSID cur_st_sid, AccelK
           is_cycling = false;
           t0 = 0.001*millis(); 
         } else {
-          odrv0.setTorque(tau_setpoint);
+          if (deCog) {
+            command_odrv0_torque(tau_setpoint);
+          } else { 
+            odrv0.setTorque(tau_setpoint);
+          }
         }
 
       } else {
