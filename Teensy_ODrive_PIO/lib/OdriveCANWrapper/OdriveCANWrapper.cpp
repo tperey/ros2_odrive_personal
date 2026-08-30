@@ -416,10 +416,10 @@ void sendTelemetry_singleODCW_pendulum(float cmd, float* pend_data) {
   memcpy(&packet[18], &cur_Iq_Measured, 4);
   memcpy(&packet[22], &cur_Tau_Target, 4);
   memcpy(&packet[26], &cur_Tau_Estimate, 4);
-  memcpy(&packet[30], &pend_data[0], 4);
-  memcpy(&packet[34], &pend_data[1], 4);
-  memcpy(&packet[38], &pend_data[2], 4);
-  memcpy(&packet[42], &cmd, 4);  // Units can vary
+  memcpy(&packet[30], &cmd, 4);  // Units can vary
+  memcpy(&packet[34], &pend_data[0], 4);
+  memcpy(&packet[38], &pend_data[1], 4);
+  memcpy(&packet[42], &pend_data[2], 4);
 
   uint8_t checksum = 0; // Simple checksum = sum of previous bytes modulo 256
   for (int i = 0; i < (SING_PEND_TEL_PKCT_SIZE-1); i++) checksum += packet[i];

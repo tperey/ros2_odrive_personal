@@ -272,6 +272,9 @@ class LoggerNode(Node):
             tau_set = np.array(self.log_dict['tau_set'])
             tau_act = np.array(self.log_dict['tau_act'])
             cmd = np.array(self.log_dict['cmd'])
+            pend_pos = np.array(self.log_dict['pend_pos'])
+            pend_vel = np.array(self.log_dict['pend_vel'])
+            pend_acc = np.array(self.log_dict['pend_acc'])
 
             # Create directory if it doesn't exist
             os.makedirs(save_dir, exist_ok=True)
@@ -342,6 +345,33 @@ class LoggerNode(Node):
             
             # Show plot
             plt.show()
+
+            """ PENDULUM """
+            if self._incl_pendulum:
+                # Create figure with subplots
+                fig, axes = plt.subplots(2, 1, figsize=(12, 6), sharex = True)
+                
+                # Plot 1: Position
+                axes[0].plot(t, pend_pos, 'p-', linewidth=1.5, label='Pendulum position')
+                axes[0].set_ylabel('Position (rad)', fontsize=12)
+                axes[0].set_xlabel('Time (s)', fontsize=12)
+                axes[0].grid(True, alpha=0.3)
+                axes[0].legend(loc='upper right')
+                axes[0].set_title('Logs', fontsize=14, fontweight='bold')
+                
+                # Plot 2: Tau
+                axes[1].plot(t, pend_vel, 'g-', linewidth=1.5, label='Pendulum velocity')
+                axes[1].set_ylabel('Velocity (rad/s)', fontsize=12)
+                axes[1].set_xlabel('Time (s)', fontsize=12)
+                axes[1].grid(True, alpha=0.3)
+                axes[1].legend(loc='upper right')
+                
+                # Save figure
+                plot_filename = os.path.join(save_dir, f'log_pendplot_{timestamp}.png')
+                plt.savefig(plot_filename, dpi=300, bbox_inches='tight')
+                print(f"Plot saved to: {plot_filename}")
+
+                plt.show()
     
 
     """ SAFE SHUTDOWN """
