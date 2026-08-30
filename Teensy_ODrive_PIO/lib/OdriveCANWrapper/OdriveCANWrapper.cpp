@@ -699,14 +699,12 @@ bool perform_step_torque_sid(OdriveStepTorqueSID cur_st_sid, bool deCog) {
           tau_setpoint = -cur_st_sid.amp;
         }
 
-        // Check for cycle, using lead frequency
-        float cycle_fraction = cur_st_sid.freq*phase_t;  // Num cycles, with decimals
-        if ((cycle_fraction - float(cycle_n)) > 0.5) {
-          is_high = false; // At high cycle, flip direction of step
-        } else if ((cycle_fraction - float(cycle_n)) > 1.0) {
-          cycle_n++; // If fraction > 1.0 above cycle_n, a cycle has occurred
-          is_high = true; // Reset direction of step
-        }
+        // Check for flip and cycle, using lead frequency
+        float cycle_fraction = cur_st_sid.freq * phase_t;
+        uint32_t new_cycle_n = (uint32_t)cycle_fraction;      // floor
+        float frac_within_cycle = cycle_fraction - float(new_cycle_n);
+        cycle_n = new_cycle_n;
+        is_high = (frac_within_cycle < 0.5f);
 
         // Check for end
         if (cycle_n > cur_st_sid.cycle) {
