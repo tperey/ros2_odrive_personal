@@ -36,7 +36,7 @@ float Pi[3][3] = { {0.01, 0.0, 0.0}, {0.0, 0.01, 0.0}, {0.0, 0.0, 0.01} };  // c
 AccelKF thisKF = AccelKF(xi[0], xi[1], xi[2], R, Q, dt, Pi);
 
 /* ODRIVE SETUP */
-#define SINE_TORQUE_BASE_AMP 0.11
+#define SINE_TORQUE_BASE_AMP 0.11 // No Cogging
 constexpr uint8_t n_runs = 12;
 OdriveSinusoidTorqueSID st_sid_runs[n_runs] = {
     // { {SINE_TORQUE_BASE_AMP}, {0.05}, 4, 1}, // Get static friciton data
@@ -54,7 +54,7 @@ OdriveSinusoidTorqueSID st_sid_runs[n_runs] = {
     { {SINE_TORQUE_BASE_AMP, SINE_TORQUE_BASE_AMP/2}, {2.0, 5.0}, 20, 2},
     { {SINE_TORQUE_BASE_AMP, SINE_TORQUE_BASE_AMP/2}, {0.5, 2.0}, 20, 2},
     { {SINE_TORQUE_BASE_AMP, SINE_TORQUE_BASE_AMP/2}, {1.0, 2.0}, 20, 2}, // Good at flipping
-    { {2*SINE_TORQUE_BASE_AMP, SINE_TORQUE_BASE_AMP}, {2.0, 5.0}, 20, 2},
+    { {2*SINE_TORQUE_BASE_AMP, SINE_TORQUE_BASE_AMP}, {2.0, 5.0}, 20, 2}, // Quite strong 
     { {2*SINE_TORQUE_BASE_AMP, SINE_TORQUE_BASE_AMP}, {0.5, 2.0}, 20, 2},
     { {2*SINE_TORQUE_BASE_AMP, SINE_TORQUE_BASE_AMP}, {1.0, 2.0}, 20, 2}, // Good at flipping
     { {0.15, 0.05}, {0.5, 2.5}, 20, 2},
