@@ -676,7 +676,6 @@ bool perform_step_torque_sid(OdriveStepTorqueSID cur_st_sid, bool deCog) {
   odrv0.setControllerMode(ODriveControlMode::CONTROL_MODE_TORQUE_CONTROL, ODriveInputMode::INPUT_MODE_PASSTHROUGH);
   float t0 = 0.001*millis(); // [s]
   uint32_t cycle_n = 0;
-  float period = 1.0/cur_st_sid.freq; // [s]
   bool is_cycling = true;
   bool is_high = true;
   bool pause_on = true;
@@ -741,7 +740,7 @@ bool perform_step_torque_sid(OdriveStepTorqueSID cur_st_sid, bool deCog) {
 }
 
 /* With Encoder */
-bool perform_sid_with_pend_sinetorque(OdriveSinusoidTorqueSID cur_st_sid, AccelKF* thisKF, Encoder* thisEncoder, float rad_per_pulse, bool deCog = false) {
+bool perform_sid_with_pend_sinetorque(OdriveSinusoidTorqueSID cur_st_sid, AccelKF* thisKF, Encoder* thisEncoder, float rad_per_pulse, bool deCog) {
 
   // Initialize
   start_motor_single();
@@ -776,6 +775,85 @@ bool perform_sid_with_pend_sinetorque(OdriveSinusoidTorqueSID cur_st_sid, AccelK
 
         // Check for end
         if (cycle_n > cur_st_sid.cycles) {
+          odrv0.setTorque(0.0);
+          stop_motor_single(); // Necessary, otherwise cogging comp keeps it moving
+          is_cycling = false;
+          t0 = 0.001*millis(); 
+        } else {
+          if (deCog) {
+            command_odrv0_torque(tau_setpoint);
+          } else { 
+            odrv0.setTorque(tau_setpoint);
+          }
+        }
+
+      } else {
+        if (phase_t > PAUSE_TIME) {
+          // Cause break and return
+          pause_on = false; 
+        }
+      }
+
+      /* Per 1 kHz Actions*/
+
+      // Encoder and Kalman filter
+      float theta_meas = rad_per_pulse*thisEncoder->read();
+      thisKF->update(theta_meas);
+      pend_data[0] = thisKF->getPosition();
+      pend_data[1] = thisKF->getVelocity();
+      pend_data[2] = thisKF->getAcceleration();
+
+      sendTelemetry_singleODCW_pendulum(tau_setpoint, pend_data);
+      status_ok = check_for_shutdown_msg();
+      t_prev = now;
+    }
+  }
+
+  // At the end, ensure shutdown
+  stop_motor_single();
+
+  return status_ok;
+}
+
+bool perform_sid_with_pend_steptorque(OdriveStepTorqueSID cur_st_sid, AccelKF* thisKF, Encoder* thisEncoder, float rad_per_pulse, bool deCog) {
+
+  // Initialize
+  start_motor_single();
+  odrv0.setControllerMode(ODriveControlMode::CONTROL_MODE_TORQUE_CONTROL, ODriveInputMode::INPUT_MODE_PASSTHROUGH);
+  float t0 = 0.001*millis(); // [s]
+  uint32_t cycle_n = 0;
+  bool is_cycling = true;
+  bool is_high = true;
+  uint32_t t_prev = micros();
+  bool status_ok = true;  // Used to allow stop in logger
+  bool pause_on = true;
+  float pend_data[3] = {0.0, 0.0, 0.0};
+
+  while ((pause_on) && (status_ok)) {
+    float tau_setpoint = 0.0;  // [N-m]
+    float phase_t = 0.001*millis() - t0;  // [s]
+
+    // Enforce 1 kHz cycle
+    uint32_t now = micros();
+    if ( (now - t_prev) > 1000) {
+      if (is_cycling) {
+
+        // Compute step torque
+        if (is_high) {
+          tau_setpoint = cur_st_sid.amp;
+        } else {
+          tau_setpoint = -cur_st_sid.amp;
+        }
+
+        // Check for flip and cycle, using lead frequency
+        float cycle_fraction = cur_st_sid.freq * phase_t;
+        uint32_t new_cycle_n = (uint32_t)cycle_fraction;      // floor
+        float frac_within_cycle = cycle_fraction - float(new_cycle_n);
+        cycle_n = new_cycle_n;
+        is_high = (frac_within_cycle < 0.5f);
+
+        // Check for end
+        if (cycle_n > cur_st_sid.cycle) {
           odrv0.setTorque(0.0);
           stop_motor_single(); // Necessary, otherwise cogging comp keeps it moving
           is_cycling = false;
