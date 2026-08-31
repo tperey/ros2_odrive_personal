@@ -14,6 +14,7 @@ Sys ID with the above
 *Test reading pendulum simultaneously
 
 NOTES
+--Odrive values should be in REVS, not RADS as of 2026-08-30
 --Code generally expects Teensy on ACM1 and Odrive on ACM0
 --Cogging
 
