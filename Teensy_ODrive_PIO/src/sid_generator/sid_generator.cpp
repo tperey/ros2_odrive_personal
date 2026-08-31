@@ -59,7 +59,7 @@ void setup() {
 
     // Odrive setup
     initialize_singleODCW();
-    load_anticogging_config(CoggingConfig::cogging_map, ANTICOG_PERCENT_TO_USE, 0.0, 0.0);
+    //load_anticogging_config(CoggingConfig::cogging_map, ANTICOG_PERCENT_TO_USE, 0.0, 0.0);
 }
 
 void loop() {
@@ -81,14 +81,14 @@ void loop() {
             cur_st_sid.cycles = max_freq * 10;
 
             this_status_ok = perform_sid_with_pend_sinetorque(
-                cur_st_sid, &thisKF, &furataEncoder, RAD_PER_PULSE, true);
+                cur_st_sid, &thisKF, &furataEncoder, RAD_PER_PULSE, false);
         } else {
             // Step
             float freq = freq_dist(gen);
             float amp = amp_dist(gen);
             OdriveStepTorqueSID cur_st_sid = {amp, freq, (uint32_t) (freq*10)};
             this_status_ok = perform_sid_with_pend_steptorque(
-                cur_st_sid, &thisKF, &furataEncoder, RAD_PER_PULSE, true);
+                cur_st_sid, &thisKF, &furataEncoder, RAD_PER_PULSE, false);
         }
     }
     this_status_ok = false;
