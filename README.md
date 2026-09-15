@@ -1,17 +1,8 @@
 TODO:
-Setting up Teensy Odrive Control via CAN
-*Currently, have to MANUALLY home motor to known position (with paint marker), and then START/RESET Teensy at that position
---Currently, manually set pos_estimate to that position on boot in Teensy: 0.3632275462150574
---Ideally, in order to start from anywhere, should run odrv0.axis0.pos_estimate = odrv0.onboard_encoder0.raw (but with CAN)
-
-
-Sys ID with the above
-*For cogging
---In general, cogging map seems to be working well, but HIGHLY DEPENDENT ON MANUAL HOMING TO EXACT RIGHT SPOT ON STARTUP! REALLY NEED PRECISE HOMING TO EXACT START POSITION USED TO GENERATE MAP, USING ABSOLUTE ENCODER!
+Sys ID
 *For pendulum
 --Residuals seem exactly aligned with missing coulomb friction. Try a tanh or constant friction term? WON'T BE ABLE TO USE LQR!
 --Could optimize filter params with linear method to minimize residual? PROB DON'T CARE
-*Test reading pendulum simultaneously
 
 NOTES
 --Odrive values should be in REVS, not RADS as of 2026-08-30
