@@ -988,7 +988,8 @@ float command_odrv0_torque(float tau_setpoint) {
     tau_to_set += percent_anticog*anticog_map[cur_count];
   }
 
-  // TODO: test thisdeal with 1 sample lag in tau setpoint log
+  // TODO: test this to deal with 1 sample lag in tau setpoint log
+  odrv0_user_data.last_torques.Torque_Target = -tau_to_set;
 
   // Run command (have to flip sign back to Odrive space)
   odrv0.setTorque(-tau_to_set);
