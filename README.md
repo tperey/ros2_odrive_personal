@@ -3,6 +3,7 @@ Sys ID
 *For pendulum
 --Residuals seem exactly aligned with missing coulomb friction. Try a tanh or constant friction term? WON'T BE ABLE TO USE LQR!
 --Could optimize filter params with linear method to minimize residual? PROB DON'T CARE
+--DEAL WITH THE MF LAG IN YOUR DECOGGED LOGGING! I added a fix but its untested
 
 NOTES
 --Odrive values should be in REVS, not RADS as of 2026-08-30
