@@ -253,99 +253,6 @@ class MotorAnalyzer:
 
         self.runs_parsed = True
 
-    # def add_startpoints(self, start_list):
-    #     for entry in start_list:
-    #         idx = np.argmin(np.abs(entry - self.time))
-    #         self.start_list.append(idx)
-    #     self.find_endpoints()
-
-    # def find_endpoints(self, thresh = 0.0001, hold = 100, jump = 1000):
-    #     for cur_start in self.start_list:
-
-    #         start = cur_start + jump
-            
-    #         cur_velocity = (self.data["pend_vel"])[start:]
-    #         settled = np.abs(cur_velocity) < thresh
-
-    #         # Find settling point
-    #         for i in range(len(settled) - hold):
-    #             if np.all(settled[i:i+hold]):
-    #                 self.end_list.append(start+i)
-    #                 break
-
-    # # ---------------------------------------------------------------------------
-    # # RK4 integrator (for non-linear simulation method)
-    # # ---------------------------------------------------------------------------
-    # def pendulum_rhs(self, state, J, b, mgl):
-    #     """ Deriv of state """
-    #     theta, omega = state
-    #     dtheta = omega
-    #     domega = -(b * omega + mgl * np.sin(theta)) / J
-    #     return np.array([dtheta, domega])
-
-
-    # def rk4_step(self, state, dt, J, b, mgl):
-    #     k1 = self.pendulum_rhs(state, J, b, mgl)
-    #     k2 = self.pendulum_rhs(state + 0.5 * dt * k1, J, b, mgl)
-    #     k3 = self.pendulum_rhs(state + 0.5 * dt * k2, J, b, mgl)
-    #     k4 = self.pendulum_rhs(state + dt * k3, J, b, mgl)
-    #     return state + (dt / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)
-
-
-    # def simulate_theta(self, t, theta0, omega0, J, b, mgl):
-    #     """RK4-integrate theta(t) at the exact (possibly non-uniform) sample times in t."""
-    #     state = np.array([theta0, omega0], dtype=float)
-    #     out = np.empty(len(t))
-    #     out[0] = state[0]
-    #     for i in range(len(t) - 1):
-    #         dt = t[i + 1] - t[i]
-    #         state = self.rk4_step(state, dt, J, b, mgl)
-    #         out[i + 1] = state[0]
-    #     return out
-
-
-    # # ---------------------------------------------------------------------------
-    # # Fitting helpers
-    # # ---------------------------------------------------------------------------
-
-    # def _generate_runs(self):
-    #     self.runs = []  # Clear to start
-    #     for start, end in zip(self.start_list, self.end_list):
-    #         cur_t = self.time[start:end]
-    #         cur_pos = (self.data["pend_pos"])[start:end]
-    #         self.runs.append((cur_t, cur_pos))
-
-    # def test_fit(self, J, b, mgl):
-    #     """ For each run, copmare actual to forward simulation """
-    #     self._generate_runs()
-    #     for t, theta in self.runs:
-
-    #         # Forward simulation
-    #         theta_sim = self.simulate_theta(t, theta[0], 0.0, J, b, mgl)
-
-    #         # Compare to actual
-    #         residuals = (theta_sim - theta)**2
-
-    #         # Plot
-    #         fig, axs = plt.subplots(2,1, figsize=(10,6), sharex = True)
-    #         axs[0].plot(t, theta, label = "Measured")
-    #         axs[0].plot(t, theta_sim, label = "Predicted")
-    #         axs[0].set_ylabel("Position (rad)")
-    #         axs[0].set_title("Linear Method Evaluation")
-    #         axs[0].legend()
-    #         axs[0].grid(True, alpha=0.3)
-    
-    #         # Velocity
-    #         axs[1].plot(t, residuals, linewidth=1, marker = ".", color = "green", label = "Square Error")
-    #         axs[1].set_ylabel("Residual (rad^2)")
-    #         axs[1].set_xlabel("Time (s)")
-    #         axs[1].legend()
-    #         axs[1].grid(True, alpha=0.3)
-    
-    #         fig.tight_layout()
-    
-    #         plt.show()
-
     # ---------------------------------------------------------------------------
     # Filtering and other helpers
     # ---------------------------------------------------------------------------
@@ -415,6 +322,17 @@ class MotorAnalyzer:
         acc_slow = (tau_net - tau_fric) / J      # exactly 0 when |tau_net| <= f_s
 
         return np.where(np.abs(w) >= eps, acc_moving, acc_slow)
+
+    def cut_run(self, name_to_cut, i_to_cut):
+        for (name, run_list) in self.runs_dict.items():
+            if name == name_to_cut:
+                cropped_run_list = []
+                for i, run in enumerate(run_list):
+                    if i != i_to_cut:
+                        cropped_run_list.append(run)
+                    else:
+                        print(f"Actually tried to cut a run")
+                self.runs_dict[name] = cropped_run_list
 
     # ---------------------------------------------------------------------------
     # Method 1: derivative-based, linear least squares (with bounds via least_squares)
@@ -661,133 +579,208 @@ class MotorAnalyzer:
                 fig.tight_layout()
                 plt.show()
 
-    # # ---------------------------------------------------------------------------
-    # # Method 2: forward-simulation (RK4) + nonlinear least squares
-    # # ---------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
+    # Method 2: forward-simulation (RK4) with coulombic friction + nonlinear least squares
+    # ---------------------------------------------------------------------------
 
-    # def fit_nonlinear(self, mgl, J0, b0, omega0=0.0):
-    #     """
-    #     mgl: known gravity term
-    #     J0: initial inertia guess
-    #     b0: initial damping guess
-    #     omega0: initial angular velocity for every run (0.0 for lift-and-drop-from-rest).
-    #             Pass a list instead if release velocity varies run to run.
-    #     """
-    #     self._generate_runs()
-    #     N = len(self.runs)
-    #     omega0_list = omega0 if hasattr(omega0, "__len__") else [omega0] * N
+    """ SIMULATION """
+    def motor_lhs(self, state, tau, J, b, f_s):
+        """ Deriv of state """
+        theta, omega = state
+        dtheta = omega
+        domega = self._evaluate_true_accel(omega, np.sign(omega), tau, J, b, f_s, eps=0.1)
+        return np.array([dtheta, domega])
 
-    #     def residuals(params):
-    #         J, b = params
-    #         res = []
-    #         for (t, theta), w0 in zip(self.runs, omega0_list):
-    #             sim = self.simulate_theta(t, theta[0], w0, J, b, mgl)
-    #             res.append(sim - theta)
-    #         return np.concatenate(res)
+    def rk4_motor_step(self, state, dt, tau, J, b, f_s):
+        k1 = self.motor_lhs(state, tau, J, b, f_s)
+        k2 = self.motor_lhs(state + 0.5 * dt * k1, tau, J, b, f_s)
+        k3 = self.motor_lhs(state + 0.5 * dt * k2, tau, J, b, f_s)
+        k4 = self.motor_lhs(state + dt * k3, tau, J, b, f_s)
+        return state + (dt / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)
 
-    #     result = least_squares(
-    #         residuals, x0=[J0, b0],
-    #         bounds=([1e-12, 0], [np.inf, np.inf]),
-    #         method="trf",
-    #         loss="soft_l1",   # mild robustness to outlier samples/glitches; use 'linear' for plain LS
-    #         x_scale=[max(J0, 1e-9), max(b0, 1e-9)],  # helps scipy when J and b have very different magnitudes
-    #         verbose=2,
-    #     )
-    #     return result
+    def simulate_motor(self, t, theta0, omega0, tau, J, b, f_s):
+        """RK4-integrate the diff equa at the exact (possibly non-uniform) sample times in t."""
+        state = np.array([theta0, omega0], dtype=float)
+        out = np.empty((len(t), 2))
+        out[0,:] = state
+        for i in range(len(t) - 1):
+            dt = t[i + 1] - t[i]
+            state = self.rk4_motor_step(state, dt, tau[i], J, b, f_s)
+            out[i+1, :] = state
+        return out
 
-    # # ---------------------------------------------------------------------------
-    # # Method 3: forward-simulation (RK4) with coulombic friction + nonlinear least squares
-    # # ---------------------------------------------------------------------------
-    # def pendulum_fs_rhs(self, state, J, b, mgl, f_s, k):
-    #     """ Deriv of state """
-    #     theta, omega = state
-    #     dtheta = omega
-    #     domega = -(b * omega + mgl * np.sin(theta) + f_s * np.tanh(k*omega)) / J
-    #     return np.array([dtheta, domega])
+    def simulate_runs(self):
+        """ For each run, copmare actual to forward simulation """
+        J = self.motor_params["J"]
+        b = self.motor_params["b"]
+        f_s = self.motor_params["f_s"]
+        if not self.runs_parsed:
+            self.parse_runs()
 
+        for (name, run_list) in self.runs_dict.items():
+            for (i, run) in enumerate(run_list):
+                # Parse
+                t = np.array(run["time"])/1000.0
+                tau = np.array(run["used_tau_filt"])
+                theta = np.array(run["pos"])
+                omega = np.array(run["vel_filt"])
 
-    # def rk4_fs_step(self, state, dt, J, b, mgl, f_s, k):
-    #     k1 = self.pendulum_fs_rhs(state, J, b, mgl, f_s, k)
-    #     k2 = self.pendulum_fs_rhs(state + 0.5 * dt * k1, J, b, mgl, f_s, k)
-    #     k3 = self.pendulum_fs_rhs(state + 0.5 * dt * k2, J, b, mgl, f_s, k)
-    #     k4 = self.pendulum_fs_rhs(state + dt * k3, J, b, mgl, f_s, k)
-    #     return state + (dt / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)
+                # Forward simulation
+                out_sim = self.simulate_motor(t, theta[0], omega[0], tau, J, b, f_s)
+                theta_sim = out_sim[:, 0]
+                omega_sim = out_sim[:, 1]
 
+                # Compare to actual
+                residuals_t = (theta_sim - theta)**2
+                residuals_td = (omega_sim - omega)**2
 
-    # def simulate_fs_theta(self, t, theta0, omega0, J, b, mgl, f_s, k):
-    #     """RK4-integrate theta(t) at the exact (possibly non-uniform) sample times in t."""
-    #     state = np.array([theta0, omega0], dtype=float)
-    #     out = np.empty(len(t))
-    #     out[0] = state[0]
-    #     for i in range(len(t) - 1):
-    #         dt = t[i + 1] - t[i]
-    #         state = self.rk4_fs_step(state, dt, J, b, mgl, f_s, k)
-    #         out[i + 1] = state[0]
-    #     return out
+                # Plot
+                fig, axs = plt.subplots(4,1, figsize=(12,7.5), sharex = True)
+                axs[0].plot(t, tau, label = "Tau input (decogged, filtered, used)", color = "red")
+                axs[0].set_ylabel("Torque (N-m)")
+                axs[0].set_title(f"Forward Simulation of {name}_{i}")
+                axs[0].legend()
+                axs[0].grid(True, alpha=0.3)
+                
+                axs[1].plot(t, theta, label = "Measured")
+                axs[1].plot(t, theta_sim, label = "Predicted")
+                axs[1].set_ylabel("Position (rev)")
+                axs[1].legend()
+                axs[1].grid(True, alpha=0.3)
 
-    # def fit_fs_nonlinear(self, mgl, J0, b0, fs0, omega0=0.0, k=10):
-    #     """
-    #     mgl: known gravity term
-    #     J0: initial inertia guess
-    #     b0: initial damping guess
-    #     fs0: initial coulombic friction guess
-    #     omega0: initial angular velocity for every run (0.0 for lift-and-drop-from-rest).
-    #             Pass a list instead if release velocity varies run to run.
-    #     k: factor to use for tanh. NOT learned. Functionally a hyperparameter
-    #     """
-    #     self._generate_runs()
-    #     N = len(self.runs)
-    #     omega0_list = omega0 if hasattr(omega0, "__len__") else [omega0] * N
-
-    #     def residuals(params):
-    #         J, b, fs = params
-    #         res = []
-    #         for (t, theta), w0 in zip(self.runs, omega0_list):
-    #             sim = self.simulate_fs_theta(t, theta[0], w0, J, b, mgl, fs, k)
-    #             res.append(sim - theta)
-    #         return np.concatenate(res)
-
-    #     result = least_squares(
-    #         residuals, x0=[J0, b0, fs0],
-    #         bounds=([1e-12, 0, 0], [np.inf, np.inf, np.inf]),
-    #         method="trf",
-    #         loss="soft_l1",   # mild robustness to outlier samples/glitches; use 'linear' for plain LS
-    #         x_scale=[max(J0, 1e-9), max(b0, 1e-9), max(fs0, 1e-9)],  # helps scipy when J and b have very different magnitudes
-    #         verbose=2,
-    #     )
-    #     return result
-
-    # def test_fs_fit(self, J, b, mgl, f_s, k = 10):
-    #     """ For each run, copmare actual to forward simulation """
-    #     self._generate_runs()
-    #     for t, theta in self.runs:
-
-    #         # Forward simulation
-    #         theta_sim = self.simulate_fs_theta(t, theta[0], 0.0, J, b, mgl, f_s, k)
-
-    #         # Compare to actual
-    #         residuals = (theta_sim - theta)**2
-
-    #         # Plot
-    #         fig, axs = plt.subplots(2,1, figsize=(10,6), sharex = True)
-    #         axs[0].plot(t, theta, label = "Measured")
-    #         axs[0].plot(t, theta_sim, label = "Predicted")
-    #         axs[0].set_ylabel("Position (rad)")
-    #         axs[0].set_title("Linear Method Evaluation")
-    #         axs[0].legend()
-    #         axs[0].grid(True, alpha=0.3)
+                axs[2].plot(t, omega, label = "Measured")
+                axs[2].plot(t, omega_sim, label = "Predicted")
+                axs[2].set_ylabel("Velocity (rev/s)")
+                axs[2].legend()
+                axs[2].grid(True, alpha=0.3)
+        
+                axs[3].plot(t, residuals_t, linewidth=1, color = "cyan", label = "Position Residual (rev^2)")
+                axs[3].plot(t, residuals_td, linewidth=1, color = "green", label = "Velocity Residual((rev/s)^2)")
+                axs[3].set_ylabel("Residual")
+                axs[3].set_xlabel("Time (ms)")
+                axs[3].set_title("Residuals")
+                axs[3].legend()
+                axs[3].grid(True, alpha=0.3)
+        
+                fig.tight_layout()
+        
+                plt.show()
     
-    #         # Velocity
-    #         axs[1].plot(t, residuals, linewidth=1, marker = ".", color = "green", label = "Square Error")
-    #         axs[1].set_ylabel("Residual (rad^2)")
-    #         axs[1].set_xlabel("Time (s)")
-    #         axs[1].legend()
-    #         axs[1].grid(True, alpha=0.3)
-    
-    #         fig.tight_layout()
-    
-    #         plt.show()
+    """ FITTING """
+    def smooth_motor_lhs(self, state, tau, J, b, f_s, k = 100):
+        """ Deriv of state """
+        theta, omega = state
+        dtheta = omega
+        domega = (tau - b * omega - f_s * np.tanh(k*omega)) / J
+        return np.array([dtheta, domega])
 
+    def smooth_rk4_motor_step(self, state, dt, tau, J, b, f_s):
+        k1 = self.smooth_motor_lhs(state, tau, J, b, f_s)
+        k2 = self.smooth_motor_lhs(state + 0.5 * dt * k1, tau, J, b, f_s)
+        k3 = self.smooth_motor_lhs(state + 0.5 * dt * k2, tau, J, b, f_s)
+        k4 = self.smooth_motor_lhs(state + dt * k3, tau, J, b, f_s)
+        return state + (dt / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)
+
+    def smooth_simulate_motor(self, t, theta0, omega0, tau, J, b, f_s):
+        """RK4-integrate the diff equa at the exact (possibly non-uniform) sample times in t."""
+        state = np.array([theta0, omega0], dtype=float)
+        out = np.empty((len(t), 2))
+        out[0,:] = state
+        for i in range(len(t) - 1):
+            dt = t[i + 1] - t[i]
+            state = self.smooth_rk4_motor_step(state, dt, tau[i], J, b, f_s)
+            out[i+1, :] = state
+        return out
+
+    def fit_nonlinear(self, J0, b0, fs0, tau_source = "act", fit_source = "vel", filter_bw = 0.0, inclCoulomb = True):
+        """
+        J0: initial inertia guess
+        b0: initial damping guess
+        fs0: initial coulombic friction guess
+        """
+        if not self.runs_parsed:
+            self.parse_runs()
+
+        # First, do proper filtering
+        for run_list in self.runs_dict.values():
+            for run in run_list:
+                t = np.array(run["time"])
+                if tau_source == "act":
+                    tau_raw = np.array(run["tau_act_decogged"])
+                elif tau_source == "set":
+                    tau_raw = np.array(run["tau_set_decogged"])
+                else:
+                    raise ValueError("This is not a valid tau_source")
+                theta = np.array(run["pos"])
+                theta_d_raw = np.array(run["vel"])
+                sgn_theta_d_raw = np.sign(theta_d_raw)
+
+                dt = np.mean(np.diff(t))
+                if not np.allclose(np.diff(t), dt, rtol=1.0):
+                    raise ValueError("Method 1 requires (approximately) uniform sampling per run; "
+                                    "resample/interpolate onto a uniform grid first.")
+                theta_dd_raw = np.gradient(theta_d_raw, 0.001)
+            
+                # Filter
+                self.linear_filter_bw = filter_bw
+                if filter_bw != 0.0:
+                    theta_d = self._implement_filtfilt(theta_d_raw, cutoff_hz=filter_bw)
+                    sgn_theta_d = self._implement_filtfilt(sgn_theta_d_raw, cutoff_hz=filter_bw)
+                    theta_dd = self._implement_filtfilt(theta_dd_raw, cutoff_hz=filter_bw)
+                    tau = self._implement_filtfilt(tau_raw, cutoff_hz=filter_bw)
+                else:
+                    theta_d = theta_d
+                    sgn_theta_d = sgn_theta_d_raw
+                    theta_dd = theta_dd_raw
+                    tau = tau_raw
+                run["vel_filt"] = theta_d  # Save for eval
+                run["sgn_vel_filt"] = sgn_theta_d
+                run["accel_filt"] = theta_dd
+                run["used_tau_filt"] = tau
+
+        def residuals(params):
+            J, b, f_s = params
+            res = []
+            for run_list in self.runs_dict.values():
+                for run in run_list:
+                    # Parse
+                    t = np.array(run["time"])/1000.0
+                    tau = np.array(run["used_tau_filt"])
+                    theta = np.array(run["pos"])
+                    omega = np.array(run["vel_filt"])
+    
+                    # Forward simulation
+                    out_sim = self.smooth_simulate_motor(t, theta[0], omega[0], tau, J, b, f_s)
+                    theta_sim = out_sim[:, 0]
+                    omega_sim = out_sim[:, 1]
+    
+                    # Compare to actual
+                    if fit_source == "pos":
+                        cur_res = (theta_sim - theta)
+                    elif fit_source == "vel":
+                        cur_res = (omega_sim - omega)
+                    else:
+                        raise ValueError("Invalid fit source")
+                    res.append(cur_res)
+            return np.concatenate(res)
+
+        print("Starting least_squares")
+        result = least_squares(
+            residuals, x0=[J0, b0, fs0],
+            bounds=([1e-12, 0, 0], [np.inf, np.inf, np.inf]),
+            method="trf",
+            loss="soft_l1",   # mild robustness to outlier samples/glitches; use 'linear' for plain LS
+            x_scale=[max(J0, 1e-9), max(b0, 1e-9), max(fs0, 1e-9)],  # helps scipy when J and b have very different magnitudes
+            verbose=2,
+        )
+
+        # Save result
+        self.motor_params = {
+            "J": result.x[0],
+            "b": result.x[1],
+            "f_s": result.x[2] if inclCoulomb else 0.0
+        }
+        return result
 
 # ---------------------------------------------------------------------------
 # Fit dat data
@@ -799,49 +792,182 @@ if __name__ == "__main__":
     one_example = base_path + "sinetau_nocog_motoronly_001/logs_20260823_211700.pkl"
 
     analyzer = MotorAnalyzer(cog_path, tau_filter_bw=50)
-    analyzer.add_all_logs(base_path, identifier="cogd_motoronly")
+    # analyzer.add_all_logs(base_path, identifier="cogd_motoronly")
+    analyzer.add_all_logs(base_path, identifier="motoronly")
     analyzer.parse_runs(doPlot=False)
     #analyzer.plot_raw_all()
+    analyzer.cut_run("sinetau_cogd_motoronly_001", 4)
+    analyzer.cut_run("sinetau_nocog_motoronly_001", 4)
+
+    ### LINEAR FIT ###
+    print("-----Linear-----")
     result = analyzer.fit_linear(debug=False, filter_bw = 25)
     print(result)
-    analyzer.test_linear_fit()
-    # analyzer.best_test_linear_fit()
-    # analyzer.optimize_linear_fit()
+    # # analyzer.test_linear_fit()
+    # # analyzer.best_test_linear_fit()
+    # # analyzer.optimize_linear_fit()
+    # analyzer.simulate_runs()
+    # analyzer.motor_params["f_s"] = 0.055  # Seems to lead to a better velocity fit in some cases, and aligns with cogging experiment
+    # analyzer.simulate_runs()
 
+    ### NONLINEAR FIT ###
+    print()
+    print("-----Nonlinear-----")
+    result = analyzer.fit_nonlinear(2.0e-3, 2.0e-17, 5.0e-2, filter_bw = 25)
+    print(result)
+    analyzer.simulate_runs()
 
-    # analyzer.add_startpoints([10.364, 25.072, 42.481, 55.682, 71.790, 88.580, 102.856, 117.666, 133.164, 149.647, 168.993, 186.630, 207.018, 233.207, 253.556])
-    # #analyzer.add_startpoints([10.364])
-    # #analyzer.plot_raw()
+# from scipy.optimize import lsq_linear
 
-    # m = 38.03/1000.0  # [kg]
-    # g = 9.81  # [m/s^2]
-    # l = (77.171 - 30.0)/1000.0  # [m]
+    # def fit_furuta_linear(self, debug=True, inclCoulomb=True, tau_source="act",
+    #                       filter_bw=100.0, trim=100, fixed=None, L1=None, g=9.81,
+    #                       w2=1.0, vel_eps=1e-2, q2_offset=0.0, q2_sign=1.0,
+    #                       pos2_key="pos2", vel2_key="vel2", tau2_key=None):
+    #     """
+    #     Linear least-squares fit of the Furuta pendulum parameters (Cazzolato & Prime, eq. 19),
+    #     using numerical differentiation + zero-phase filtering to get accelerations.
 
-    # # Linear fit
-    # linear_fit = analyzer.fit_linear(mgl=(m*g*l), debug=False)
+    #     Lumped parameters identified:
+    #         P0    = J1zz + m1 l1^2 + m2 L1^2 + J2xx      (total inertia seen by the motor, incl. rotor)
+    #         K     = m2 l2^2 + J2yy - J2xx
+    #         C     = m2 L1 l2
+    #         J2hat = J2zz + m2 l2^2                        (pivot inertia; what your drop test measures)
+    #         G     = g m2 l2
+    #         b1, b2 (viscous), f1, f2 (Coulomb, optional)
 
-    # J_fit, b_fit = linear_fit.x
-    # print(f"Result of Linear Method: J = {J_fit}, b = {b_fit}")
+    #     fixed : dict of known params to hold constant, e.g. {"J2hat": 4.1e-3, "b2": 2.8e-4}
+    #     L1    : if given, enforces C = G*L1/g (removes one free parameter)
+    #     w2    : weight on the pendulum-row equation relative to the motor row
+    #     q2_offset, q2_sign : convert your encoder to the paper's convention
+    #                          (theta2 = 0 hanging down, CCW positive viewed from front)
+    #     tau2_key : run key for a disturbance torque on the pendulum (None -> tau2 = 0)
+    #     Returns: dict of identified parameters (std errors in self.furuta_param_std)
+    #     """
+    #     fixed = dict(fixed or {})
+    #     if not self.runs_parsed:
+    #         self.parse_runs()
 
-    # #analyzer.test_fit(J_fit, b_fit, (m*g*l))
+    #     tau1_key = {"act": "tau_act_decogged", "set": "tau_set_decogged"}.get(tau_source)
+    #     if tau1_key is None:
+    #         raise ValueError("This is not a valid tau_source")
 
-    # print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
+    #     names = ["P0", "K", "C", "J2hat", "b1", "b2", "G"]
+    #     if inclCoulomb:
+    #         names += ["f1", "f2"]
+    #     tie_CG = L1 is not None
+    #     if tie_CG:
+    #         if "C" in fixed:
+    #             raise ValueError("With L1 given, C is tied to G; fix G instead of C.")
+    #         names.remove("C")
+    #     bad = set(fixed) - set(names)
+    #     if bad:
+    #         raise ValueError(f"Unknown (or eliminated) fixed params: {bad}")
 
-    # """ Non-linear fit """
-    # nonlinear_fit = analyzer.fit_nonlinear((m*g*l), 1e-4, 1e-4, 0.0)
+    #     def regressors(q1d, q2, q2d, q1dd, q2dd):
+    #         s, c, s2 = np.sin(q2), np.cos(q2), np.sin(2 * q2)
+    #         z = np.zeros_like(q2)
+    #         sg1, sg2 = np.tanh(q1d / vel_eps), np.tanh(q2d / vel_eps)
+    #         r1 = dict(P0=q1dd, K=q1dd * s**2 + q1d * q2d * s2, C=q2dd * c - s * q2d**2,
+    #                   J2hat=z, b1=q1d, b2=z, G=z, f1=sg1, f2=z)
+    #         r2 = dict(P0=z, K=-0.5 * q1d**2 * s2, C=q1dd * c,
+    #                   J2hat=q2dd, b1=z, b2=q2d, G=s, f1=z, f2=sg2)
+    #         if tie_CG:  # C*colC + G*colG with C = G*L1/g  ->  G*(colG + colC*L1/g)
+    #             for r in (r1, r2):
+    #                 r["G"] = r["G"] + r["C"] * L1 / g
+    #         return (np.column_stack([r1[n] for n in names]),
+    #                 np.column_stack([r2[n] for n in names]))
 
-    # J_n_fit, b_n_fit = nonlinear_fit.x
-    # print(f"Result of NON-Linear Method: J = {J_n_fit}, b = {b_n_fit}")
+    #     blocks = []  # per run: (t, A1, y1, A2, y2)
+    #     for run_list in self.runs_dict.values():
+    #         for run in run_list:
+    #             t = np.asarray(run["time"], float)
+    #             dt = np.mean(np.diff(t))
+    #             if not np.allclose(np.diff(t), dt, rtol=0.05):
+    #                 raise ValueError("Requires (approximately) uniform sampling per run; "
+    #                                  "resample onto a uniform grid first.")
 
-    # analyzer.test_fit(J_n_fit, b_n_fit, (m*g*l))
+    #             q1d_raw = np.asarray(run["vel"], float)
+    #             q2_raw = q2_sign * np.asarray(run[pos2_key], float) + q2_offset
+    #             q2d_raw = q2_sign * np.asarray(run[vel2_key], float)
+    #             tau1_raw = np.asarray(run[tau1_key], float)
+    #             tau2_raw = (q2_sign * np.asarray(run[tau2_key], float)) if tau2_key else np.zeros_like(t)
 
-    # print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
+    #             f = lambda x: self._implement_filtfilt(x, cutoff_hz=filter_bw)
+    #             q1d, q2, q2d = f(q1d_raw), f(q2_raw), f(q2d_raw)
+    #             q1dd = f(np.gradient(q1d_raw, dt))
+    #             q2dd = f(np.gradient(q2d_raw, dt))
+    #             tau1, tau2 = f(tau1_raw), f(tau2_raw)
 
-    # """ Non-linear fit, with friction """
-    # # k_to_use = 10
-    # # fs_nonlinear_fit = analyzer.fit_fs_nonlinear((m*g*l), 1e-4, 1e-4, 0.001, 0.0, k_to_use)
+    #             sl = slice(trim, len(t) - trim) if trim else slice(None)  # drop filtfilt edge effects
+    #             q1d, q2, q2d, q1dd, q2dd, tau1, tau2, ts = [x[sl] for x in
+    #                                                          (q1d, q2, q2d, q1dd, q2dd, tau1, tau2, t)]
+    #             A1, A2 = regressors(q1d, q2, q2d, q1dd, q2dd)
+    #             blocks.append((ts, A1, tau1, A2, tau2))
 
-    # # Jnfs_fit, bnfs_fit, fs_fit = fs_nonlinear_fit.x
-    # # print(f"Result of Nonlinear method WITH FRICTION: J = {Jnfs_fit}, b = {bnfs_fit}, fs = {fs_fit}")
+    #     A1 = np.vstack([b[1] for b in blocks]); y1 = np.concatenate([b[2] for b in blocks])
+    #     A2 = np.vstack([b[3] for b in blocks]); y2 = np.concatenate([b[4] for b in blocks])
 
-    # # analyzer.test_fs_fit(Jnfs_fit, bnfs_fit, (m*g*l), fs_fit, k_to_use)
+    #     # Move fixed parameters to the RHS
+    #     free = [i for i, n in enumerate(names) if n not in fixed]
+    #     fix = [i for i, n in enumerate(names) if n in fixed]
+    #     p_fix = np.array([fixed[names[i]] for i in fix])
+    #     if fix:
+    #         y1 = y1 - A1[:, fix] @ p_fix
+    #         y2 = y2 - A2[:, fix] @ p_fix
+    #     A1f, A2f = A1[:, free], A2[:, free]
+
+    #     # Column scaling (parameters span many orders of magnitude)
+    #     scale = np.sqrt(np.mean(np.vstack([A1f, A2f]) ** 2, axis=0))
+    #     scale[scale == 0] = 1.0
+    #     A = np.vstack([A1f / scale, w2 * A2f / scale])
+    #     y = np.concatenate([y1, w2 * y2])
+
+    #     lb = np.array([1e-12 if names[i] in ("P0", "J2hat") else 0.0 for i in free])
+    #     result = lsq_linear(A, y, bounds=(lb, np.full(len(free), np.inf)))
+    #     p_free = result.x / scale
+
+    #     # Approximate standard errors (ignores active bounds; filtered residuals are correlated,
+    #     # so treat these as optimistic)
+    #     dof = max(len(y) - len(free), 1)
+    #     s2 = np.sum(result.fun ** 2) / dof
+    #     cov = s2 * np.linalg.pinv(A.T @ A)
+    #     std_free = np.sqrt(np.diag(cov)) / scale
+
+    #     params = dict(zip(names, np.zeros(len(names))))
+    #     for i, v in zip(fix, p_fix):
+    #         params[names[i]] = v
+    #     std = {n: 0.0 for n in names}
+    #     for i, v, s in zip(free, p_free, std_free):
+    #         params[names[i]], std[names[i]] = v, s
+    #     if tie_CG:
+    #         params["C"] = params["G"] * L1 / g
+    #         std["C"] = std["G"] * L1 / g
+
+    #     # Derived quantities
+    #     params["m2_l2"] = params["G"] / g                     # m2*l2
+    #     params["K_minus_J2hat"] = params["K"] - params["J2hat"]  # = J2yy - J2zz - J2xx (~0 for slender symmetric rod)
+
+    #     self.furuta_params = params
+    #     self.furuta_param_std = std
+    #     self.furuta_cond = np.linalg.cond(A)
+
+    #     if debug:
+    #         print(f"cond(A) = {self.furuta_cond:.2e}")
+    #         for n in names:
+    #             tag = " (fixed)" if n in fixed else ""
+    #             print(f"{n:>6s} = {params[n]: .4e} ± {std[n]:.1e}{tag}")
+    #         print(f"K - J2hat = {params['K_minus_J2hat']:.3e}   m2*l2 = {params['m2_l2']:.4e}")
+
+    #         p_full = np.array([params[n] for n in names])
+    #         for k, (ts, B1, t1, B2, t2) in enumerate(blocks):
+    #             fig, axs = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
+    #             axs[0].plot(ts, t1, label="tau1 measured (decogged)", color="black")
+    #             axs[0].plot(ts, B1 @ p_full, "--", label="row 1 model")
+    #             axs[1].plot(ts, t2, label="tau2 (0 if none)", color="black")
+    #             axs[1].plot(ts, B2 @ p_full, "--", label="row 2 model")
+    #             for ax in axs:
+    #                 ax.grid(True, alpha=0.3); ax.legend()
+    #             axs[0].set_title(f"Run {k}")
+    #             plt.show()
+
+    #     return params
