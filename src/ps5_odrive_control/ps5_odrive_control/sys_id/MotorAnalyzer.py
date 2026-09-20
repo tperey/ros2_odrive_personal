@@ -69,20 +69,24 @@ from CoggingAnalyzer import COUNTS_PER_REV
 
 class MotorAnalyzer:
 
-    def __init__(self, cog_file, tau_filter_bw = 100.0, accel_filter_bw = 100.0):
+    def __init__(self, cog_file, tau_filter_bw = 100.0):
         # Infrastructure to combine several runs
         self.log_dict = {} # to be dict of dicts
 
         self.tau_filter_bw = tau_filter_bw
-        self.accel_filter_bw = accel_filter_bw
+        self.linear_filter_bw = 0.0
 
         with open(cog_file, "r") as f:
             self.cog_map = np.asanyarray(json.load(f))
 
         # Convert everything to numpy arrays, and parse out all runs (periods between motor stops)
+        self.runs_parsed = False
         self.start_dict = {}
         self.end_dict = {}
         self.runs_dict = {}
+
+        # Fit stuff
+        self.motor_params = {}
 
     def add_all_logs(self, top_path, identifier = "motoronly"):
         """
@@ -106,36 +110,6 @@ class MotorAnalyzer:
         self._postprocess(cur_log_dict, log_name)
         
         self.log_dict[log_name] = cur_log_dict
-
-    def _implement_filtfilt(self, signal, order = 2, cutoff_hz = 100, fs = 1000):
-        nyquist = fs / 2.0
-        normal_cutoff = cutoff_hz / nyquist
-        b, a = butter(order, normal_cutoff, btype='low')
-        return filtfilt(b, a, signal)
-
-    def _postprocess(self, log, name, filter_bw = 100):
-        log["time"] -= log["time"][0]
-        if "cogd" in name:
-            print("---Shifting setpoint bwd by 1! Bc setpoint sent AFTER polling telemetry. So actual setpoint at N is logged at N+1")
-            log["tau_set"] = np.roll(np.array(log["tau_set"]), -1)
-
-        # Decog
-        encoder_indices = ((np.round(np.array(log["pos"])*COUNTS_PER_REV) % COUNTS_PER_REV)).astype(int)
-        log["tau_act_decogged"] = log["tau_act"] - self.cog_map[encoder_indices] 
-        log["tau_set_decogged"] = log["tau_set"] - self.cog_map[encoder_indices]
-
-        # Filter
-        filter_list = ["tau_act", "tau_set", "tau_act_decogged", "tau_set_decogged"]
-        for filter in filter_list:
-            log[f"{filter}_filt"] = self._implement_filtfilt(log[filter], cutoff_hz=self.tau_filter_bw)
-
-    def change_tau_filter(self, filter_bw = 100):
-        # Overwrite the prior tau filter with a new one
-        for log in self.log_dict.values():
-            # Redo filter
-            filter_list = ["tau_act", "tau_set", "tau_act_decogged", "tau_set_decogged"]
-            for filter in filter_list:
-                log[f"{filter}_filt"] = self._implement_filtfilt(log[filter], cutoff_hz=self.tau_filter_bw)
 
     def plot_raw_all(self):
         """Plot original data from a log"""
@@ -195,7 +169,7 @@ class MotorAnalyzer:
             axes[1].plot(log["time"], log["tau_set_decogged_filt"], linewidth=1, color = "red", label = "Tau set decogged Filtered")
             axes[1].plot(log["time"], log["tau_act_decogged"], linewidth=1, marker = ".", color = "gray", label = "Torque actual decogged")
             axes[1].plot(log["time"], log["tau_act_decogged_filt"], linewidth=1, color = "black", label = "Tau actual decogged Filtered")
-            axes[1].plot(log["time"], cmd, linewidth=1, marker = ".", color = "purple", label = "Command")
+            axes[1].plot(log["time"], cmd, linewidth=1, color = "purple", label = "Command")
             axes[1].set_ylabel("Torque (N-m)")
             axes[1].set_xlabel("Time (ms)")
             axes[1].legend()
@@ -276,6 +250,8 @@ class MotorAnalyzer:
             self.start_dict[name] = starts
             self.end_dict[name] = ends
             self.runs_dict[name] = runs
+
+        self.runs_parsed = True
 
     # def add_startpoints(self, start_list):
     #     for entry in start_list:
@@ -370,55 +346,320 @@ class MotorAnalyzer:
     
     #         plt.show()
 
-    # # ---------------------------------------------------------------------------
-    # # Method 1: derivative-based, linear least squares (with bounds via least_squares)
-    # # ---------------------------------------------------------------------------
-    # def fit_linear(self, mgl, debug = True):
-    #     """
-    #     Uses numerical diff and filtering to get omega and alpha.
-    #     Returns: OptimizeResult from least_squares (result.x = [J, b])
-    #     """
+    # ---------------------------------------------------------------------------
+    # Filtering and other helpers
+    # ---------------------------------------------------------------------------
+    
+    def _postprocess(self, log, name):
+        log["time"] -= log["time"][0]
+        if "cogd" in name:
+            print("---Shifting setpoint bwd by 1! Bc setpoint sent AFTER polling telemetry. So actual setpoint at N is logged at N+1")
+            log["tau_set"] = np.roll(np.array(log["tau_set"]), -1)
 
-    #     A_blocks, y_blocks = [], []
+        # Decog
+        encoder_indices = ((np.round(np.array(log["pos"])*COUNTS_PER_REV) % COUNTS_PER_REV)).astype(int)
+        log["tau_act_decogged"] = log["tau_act"] - self.cog_map[encoder_indices] 
+        log["tau_set_decogged"] = log["tau_set"] - self.cog_map[encoder_indices]
 
-    #     self._generate_runs()
-    #     for t, theta in self.runs:
-    #         dt = np.mean(np.diff(t))
-    #         if not np.allclose(np.diff(t), dt, rtol=1e-3):
-    #             raise ValueError("Method 1 requires (approximately) uniform sampling per run; "
-    #                             "resample/interpolate onto a uniform grid first.")
+        # Filter
+        filter_list = ["tau_act", "tau_set", "tau_act_decogged", "tau_set_decogged"]
+        for filter in filter_list:
+            log[f"{filter}_filt"] = self._implement_filtfilt(log[filter], cutoff_hz=self.tau_filter_bw)
 
-    #         theta_d_raw = np.gradient(theta, dt)
-    #         theta_d = self._implement_filtfilt(theta_d_raw, cutoff_hz= 30.0)
+    def _implement_filtfilt(self, signal, order = 2, cutoff_hz = 100, fs = 1000):
+        nyquist = fs / 2.0
+        normal_cutoff = cutoff_hz / nyquist
+        b, a = butter(order, normal_cutoff, btype='low')
+        return filtfilt(b, a, signal)
 
-    #         theta_dd_raw = np.gradient(theta_d, dt)
-    #         theta_dd = self._implement_filtfilt(theta_dd_raw, cutoff_hz=30.0)
+    def reapply_tau_filter(self):
+        # Correct the log_dict
+        for log in self.log_dict.values():
+            filter_list = [
+                "tau_act",
+                "tau_set",
+                "tau_act_decogged",
+                "tau_set_decogged"
+            ]
 
-    #         A_blocks.append(np.column_stack([theta_dd, theta_d]))   # coefficients of [J, b]
-    #         y_blocks.append(-mgl * np.sin(theta))                   # known-mgl term moved to RHS
+            for filter in filter_list:
+                log[f"{filter}_filt"] = self._implement_filtfilt(
+                    log[filter],
+                    cutoff_hz=self.tau_filter_bw
+                )
 
-    #         if debug:
-    #             fig, axs = plt.subplots(1, 1, figsize = (10,6), sharex = True)
-    #             axs.plot(t, theta, label = "Theta")
-    #             axs.plot(t, theta_d, label = "Omega")
-    #             axs.plot(t, theta_dd, label = "Alpha")
-    #             axs.legend()
+        # Correct the RUN dict
+        if self.runs_parsed:
+            for name, run_list in self.runs_dict.items():
+                log = self.log_dict[name]
+
+                for run_idx, run in enumerate(run_list):
+                    start = self.start_dict[name][run_idx]
+                    end = self.end_dict[name][run_idx]
+
+                    for filter in [
+                        "tau_act",
+                        "tau_set",
+                        "tau_act_decogged",
+                        "tau_set_decogged"
+                    ]:
+                        run[f"{filter}_filt"] = log[f"{filter}_filt"][start:end]
+
+    def _evaluate_true_accel(self, w, sgn_w, tau, J, b, f_s, eps=0.1):
+        # Moving: Coulomb friction opposes velocity
+        acc_moving = (tau - b * w - f_s * sgn_w) / J
+
+        # Near zero speed: friction opposes net torque, capped at +/- f_s
+        tau_net  = tau - b * w
+        tau_fric = np.clip(tau_net, -f_s, f_s)
+        acc_slow = (tau_net - tau_fric) / J      # exactly 0 when |tau_net| <= f_s
+
+        return np.where(np.abs(w) >= eps, acc_moving, acc_slow)
+
+    # ---------------------------------------------------------------------------
+    # Method 1: derivative-based, linear least squares (with bounds via least_squares)
+    # ---------------------------------------------------------------------------
+    def fit_linear(self, debug = True, inclCoulomb = True, tau_source = "act", filter_bw = 100.0):
+        """
+        Uses numerical diff and filtering to get alpha.
+        Returns: OptimizeResult from least_squares (result.x = [J, b, f_s])
+        """
+
+        A_blocks, y_blocks = [], []
+
+        if not self.runs_parsed:
+            self.parse_runs()
+
+        for run_list in self.runs_dict.values():
+            for run in run_list:
+                t = np.array(run["time"])
+                if tau_source == "act":
+                    tau_raw = np.array(run["tau_act_decogged"])
+                elif tau_source == "set":
+                    tau_raw = np.array(run["tau_set_decogged"])
+                else:
+                    raise ValueError("This is not a valid tau_source")
+                theta = np.array(run["pos"])
+                theta_d_raw = np.array(run["vel"])
+                sgn_theta_d_raw = np.sign(theta_d_raw)
+
+                dt = np.mean(np.diff(t))
+                if not np.allclose(np.diff(t), dt, rtol=1.0):
+                    raise ValueError("Method 1 requires (approximately) uniform sampling per run; "
+                                    "resample/interpolate onto a uniform grid first.")
+                theta_dd_raw = np.gradient(theta_d_raw, 0.001)
+            
+                # Filter
+                self.linear_filter_bw = filter_bw
+                theta_d = self._implement_filtfilt(theta_d_raw, cutoff_hz=filter_bw)
+                sgn_theta_d = self._implement_filtfilt(sgn_theta_d_raw, cutoff_hz=filter_bw)
+                theta_dd = self._implement_filtfilt(theta_dd_raw, cutoff_hz=filter_bw)
+                tau = self._implement_filtfilt(tau_raw, cutoff_hz=filter_bw)
+
+                run["vel_filt"] = theta_d  # Save for eval
+                run["sgn_vel_filt"] = sgn_theta_d
+                run["accel_filt"] = theta_dd
+                run["used_tau_filt"] = tau
+
+                if inclCoulomb:
+                    A_blocks.append(np.column_stack([theta_dd, theta_d, sgn_theta_d])) # coefficients of [J, b, f_s]
+                else:
+                    A_blocks.append(np.column_stack([theta_dd, theta_d]))   # coefficients of [J, b]
+                y_blocks.append(tau)                                        # RHS
+
+                if debug:
+                    fig, axs = plt.subplots(2, 1, figsize = (10,6), sharex = True)
+                    axs[0].plot(t, theta, label = "Theta")
+                    axs[0].plot(t, theta_d, label = "Omega")
+                    axs[0].plot(t, theta_dd, label = "Alpha")
+                    axs[0].grid(True, alpha=0.3)
+                    axs[0].legend()
+                    axs[1].plot(t, tau, label = "Tau", color="black")
+                    axs[1].grid(True, alpha=0.3)
+                    axs[1].legend()
+                    
+                    plt.show()
+
+        A = np.vstack(A_blocks)
+        y = np.concatenate(y_blocks)
+
+        if inclCoulomb:
+            def residuals(params):
+                J, b, f_s = params
+                return A @ np.array([J, b, f_s]) - y
+        else:
+            def residuals(params):
+                J, b = params
+                return A @ np.array([J, b]) - y
+
+        def jac(params):
+            return A  # linear model -> constant Jacobian
+
+        if inclCoulomb:
+            x0 = [1e-4, 1e-4, 0.05]
+            bounds = ([1e-12, 0, 0], [np.inf, np.inf, np.inf])
+        else:
+            x0 = [1e-4, 1e-4]
+            bounds = ([1e-12, 0], [np.inf, np.inf])
+        result = least_squares(residuals, x0, jac=jac, bounds=bounds)
+
+        # Save result
+        self.motor_params = {
+            "J": result.x[0],
+            "b": result.x[1],
+            "f_s": result.x[2] if inclCoulomb else 0.0
+        }
+        return result
+
+    def optimize_linear_fit(self, debug = True, inclCoulomb = True, min_bw = 1.0, max_bw = 101.0, step_size = 5.0, tau_source = "act"):
+        """ Run linear_fit repeatedly with tons of possible filter params and show me the best one """
+        debug_count = 0
+        cur_min_cost = np.inf
+        final_bw = self.tau_filter_bw
+        print("Starting optimum linear fit...")
+        for bw in np.arange(min_bw, max_bw, step_size):
+            cur_result = self.fit_linear(debug=False, inclCoulomb=inclCoulomb, tau_source=tau_source, filter_bw=bw)
+
+            if cur_result.cost < cur_min_cost:
+                cur_min_cost = cur_result.cost
+                final_bw = bw
+
+            if debug:
+                debug_count += 1
+                if debug_count % 10 == 0:
+                    print(f"On iteration {debug_count}")
+
+        # Rerun with the final best
+        final_result = self.fit_linear(debug=False, inclCoulomb=inclCoulomb, tau_source=tau_source, filter_bw=final_bw)
+
+        # Show final result
+        print("---OPTIMUM BASIC LINEAR FIT RESULT---")
+        print(final_result)
+        print(f"Best filter bw = {final_bw}")
+        self.test_linear_fit()
+
+    def test_linear_fit(self, useTrue = True):
+        """
+        For each run, compare the measured (filtered) acceleration against
+        the model's predicted acceleration, using the fitted J, b, f_s.
+
+            theta_dd_pred = (tau_decogged_filt - b*theta_d - f_s*sign(theta_d)) / J
+
+        Requires fit_linear() to have been run first (self.motor_params must exist).
+        """
+        if not hasattr(self, "motor_params") or self.motor_params is None:
+            raise RuntimeError("Run fit_linear() first to populate self.motor_params.")
+
+        J = self.motor_params["J"]
+        b = self.motor_params["b"]
+        f_s = self.motor_params["f_s"]
+
+        for run_list in self.runs_dict.values():
+            for run in run_list:
+                if "accel_filt" not in run:
+                    # This run wasn't processed by fit_linear (e.g. added after fitting)
+                    raise RuntimeError("Run fit_linear() first to populate acceleration.")
+
+                t = np.array(run["time"])
+                tau = np.array(run["used_tau_filt"])
+                theta_d = run["vel_filt"]
+                sgn_theta_d = run["sgn_vel_filt"]
+                theta_dd_measured = run["accel_filt"]  # saved during fit_linear
+                if useTrue:
+                    theta_dd_predicted = self._evaluate_true_accel(theta_d, sgn_theta_d, tau, J, b, f_s)
+                else:
+                    theta_dd_predicted = (tau - b * theta_d - f_s * sgn_theta_d) / J
+                residual = theta_dd_measured - theta_dd_predicted
+
+                fig, axs = plt.subplots(3, 1, figsize=(10, 6), sharex=True)
+                axs[0].plot(t, theta_dd_measured, label="Measured accel (filtered)", color="black")
+                axs[0].plot(t, theta_dd_predicted, label="Model-predicted accel", color="red", linestyle="--")
+                axs[0].set_ylabel("Accel (rad/s^2)")
+                axs[0].set_title("Measured vs Predicted Acceleration")
+                axs[0].grid(True, alpha=0.3)
+                axs[0].legend()
+
+                axs[1].plot(t, tau, label="Tau", color="blue")
+                axs[1].set_ylabel("Torque (N-m)")
+                axs[1].set_xlabel("Time (ms)")
+                axs[1].grid(True, alpha=0.3)
+                axs[1].legend()
+
+                axs[2].plot(t, residual, label="Residual (measured - predicted)", color="purple")
+                axs[2].set_ylabel("Residual (rad/s^2)")
+                axs[2].set_xlabel("Time (ms)")
+                axs[2].grid(True, alpha=0.3)
+                axs[2].legend()
+
+                fig.tight_layout()
+                plt.show()
+
+    def best_test_linear_fit(self, eps_range = [0.01, 0.3, 0.01]):
+        """
+        For each run, compare the measured (filtered) acceleration against
+        the model's predicted acceleration, using the fitted J, b, f_s.
+
+            theta_dd_pred = (tau_decogged_filt - b*theta_d - f_s*sign(theta_d)) / J
+
+        Requires fit_linear() to have been run first (self.motor_params must exist).
+        """
+        if not hasattr(self, "motor_params") or self.motor_params is None:
+            raise RuntimeError("Run fit_linear() first to populate self.motor_params.")
+
+        J = self.motor_params["J"]
+        b = self.motor_params["b"]
+        f_s = self.motor_params["f_s"]
+
+        for run_list in self.runs_dict.values():
+            for run in run_list:
+                if "accel_filt" not in run:
+                    # This run wasn't processed by fit_linear (e.g. added after fitting)
+                    raise RuntimeError("Run fit_linear() first to populate acceleration.")
+
+                t = np.array(run["time"])
+                tau = np.array(run["used_tau_filt"])
+                theta_d = run["vel_filt"]
+                sgn_theta_d = run["sgn_vel_filt"]
+                theta_dd_measured = run["accel_filt"]  # saved during fit_linear
+
+                # Find best eps
+                best_eps = 0.0
+                min_cost = np.inf
+                for eps in np.arange(eps_range[0], eps_range[1], eps_range[2]):
+                    theta_dd_predicted = self._evaluate_true_accel(theta_d, sgn_theta_d, tau, J, b, f_s, eps = eps)
+                    residual = theta_dd_measured - theta_dd_predicted
+
+                    cur_cost = np.sum(residual**2)
+                    if cur_cost < min_cost:
+                        best_eps = eps
                 
-    #             plt.show()
+                # Final re-eval
+                print(f"Best eps = {best_eps}")
+                theta_dd_predicted = self._evaluate_true_accel(theta_d, sgn_theta_d, tau, J, b, f_s, eps = eps)
+                residual = theta_dd_measured - theta_dd_predicted
 
-    #     A = np.vstack(A_blocks)
-    #     y = np.concatenate(y_blocks)
+                fig, axs = plt.subplots(3, 1, figsize=(10, 6), sharex=True)
+                axs[0].plot(t, theta_dd_measured, label="Measured accel (filtered)", color="black")
+                axs[0].plot(t, theta_dd_predicted, label="Model-predicted accel", color="red", linestyle="--")
+                axs[0].set_ylabel("Accel (rad/s^2)")
+                axs[0].set_title("Measured vs Predicted Acceleration")
+                axs[0].grid(True, alpha=0.3)
+                axs[0].legend()
 
-    #     def residuals(params):
-    #         J, b = params
-    #         return A @ np.array([J, b]) - y
+                axs[1].plot(t, tau, label="Tau", color="blue")
+                axs[1].set_ylabel("Torque (N-m)")
+                axs[1].set_xlabel("Time (ms)")
+                axs[1].grid(True, alpha=0.3)
+                axs[1].legend()
 
-    #     def jac(params):
-    #         return A  # linear model -> constant Jacobian
+                axs[2].plot(t, residual, label="Residual (measured - predicted)", color="purple")
+                axs[2].set_ylabel("Residual (rad/s^2)")
+                axs[2].set_xlabel("Time (ms)")
+                axs[2].grid(True, alpha=0.3)
+                axs[2].legend()
 
-    #     x0 = [1e-4, 1e-4]  # rough starting guess; replace with your CAD estimate if you have one
-    #     result = least_squares(residuals, x0, jac=jac, bounds=([1e-12, 0], [np.inf, np.inf]))
-    #     return result
+                fig.tight_layout()
+                plt.show()
 
     # # ---------------------------------------------------------------------------
     # # Method 2: forward-simulation (RK4) + nonlinear least squares
@@ -559,8 +800,13 @@ if __name__ == "__main__":
 
     analyzer = MotorAnalyzer(cog_path, tau_filter_bw=50)
     analyzer.add_all_logs(base_path, identifier="cogd_motoronly")
-    analyzer.parse_runs()
-    analyzer.plot_raw_all()
+    analyzer.parse_runs(doPlot=False)
+    #analyzer.plot_raw_all()
+    result = analyzer.fit_linear(debug=False, filter_bw = 25)
+    print(result)
+    analyzer.test_linear_fit()
+    # analyzer.best_test_linear_fit()
+    # analyzer.optimize_linear_fit()
 
 
     # analyzer.add_startpoints([10.364, 25.072, 42.481, 55.682, 71.790, 88.580, 102.856, 117.666, 133.164, 149.647, 168.993, 186.630, 207.018, 233.207, 253.556])
