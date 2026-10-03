@@ -202,7 +202,7 @@ class FurataAnalyzer:
 
             plt.show()
 
-    def parse_runs(self, time_key="time", command_key="cmd", dt_thresh=3, nt_thresh = 10, zero_tol=1e-3, doPlot = True):
+    def parse_runs(self, time_key="time", command_key="cmd", dt_thresh=3, nt_thresh = 10, zero_tol=1e-3, doPlot = True, trim = 100):
         """
         Split the logs into individual runs, based on gaps in the time vector.
 
@@ -233,11 +233,7 @@ class FurataAnalyzer:
         for (name, log) in self.log_dict.items():
             time = np.asarray(log[time_key])
             dt = np.diff(time)
-
-            # Indices where a gap occurs; +1 because diff shifts indices by one
             split_points = np.where(dt > dt_thresh)[0] + 1
-
-            # Build segment boundaries: [0, split1, split2, ..., len(time)]
             boundaries = np.concatenate(([0], split_points, [len(time)]))
 
             runs = []
@@ -245,24 +241,28 @@ class FurataAnalyzer:
             ends = []
             counter = 0
             for start, end in zip(boundaries[:-1], boundaries[1:]):
-                end -= 1 # Ends are 1 BEFORE the pause
+                end -= 1
                 segment_cmd = np.asarray(log[command_key])[start:end]
 
-                # Skip startup and pause segments: command is ~zero or short for the whole segment
                 if (np.mean(np.abs(segment_cmd)) < zero_tol) or (len(segment_cmd) < nt_thresh):
                     continue
 
-                run_dict = {k: np.asarray(v)[start:end] for k, v in log.items()}
-                starts.append(start)
-                ends.append(end)
+                # Trim `trim` samples off each end of the run to drop boundary artifacts
+                trimmed_start = start + trim
+                trimmed_end = end - trim
+                if trimmed_end - trimmed_start < nt_thresh:
+                    # Run too short after trimming; skip it rather than produce a near-empty run
+                    continue
+
+                run_dict = {k: np.asarray(v)[trimmed_start:trimmed_end] for k, v in log.items()}
+                starts.append(trimmed_start)
+                ends.append(trimmed_end)
                 runs.append(run_dict)
 
-                # optional by run plot
                 if doPlot:
                     self._plot_raw(f"{name}_{counter}", run_dict, False)
                     counter += 1
 
-            # Store the results
             self.start_dict[name] = starts
             self.end_dict[name] = ends
             self.runs_dict[name] = runs
@@ -309,8 +309,8 @@ class FurataAnalyzer:
         t = np.array(log["time"])
         t1d_raw = np.array(log["vel"])
         t2d_raw = np.array(log["pend_vel"])
-        t1dd_raw = np.gradient(t1d_raw, 0.001)
-        t2dd_raw = np.gradient(t2d_raw, 0.001)
+        t1dd_raw = np.gradient(t1d_raw, 0.001, edge_order=2)
+        t2dd_raw = np.gradient(t2d_raw, 0.001, edge_order=2)
     
         # Filter
         log["accel"] = self._implement_filtfilt(t1dd_raw, cutoff_hz=self.tau_filter_bw)
@@ -388,6 +388,176 @@ class FurataAnalyzer:
     #             self.runs_dict[name] = cropped_run_list
 
     # ---------------------------------------------------------------------------
+    # Simulation
+    # ---------------------------------------------------------------------------
+    
+    # """ SIMULATION """
+
+    def take_state_deriv(self, state, tau_hat, J2yy_hat, J2xx):
+        """ Deriv of state """
+        # Unpack
+        t1, t1d, t2, t2d = state
+
+        J1zz_hat = self.arm1_params["J1zz_hat"]
+        m2 = self.arm2_params["m2"]
+        L1 = self.arm1_params["L_1"]
+        l2 = self.arm2_params["l2"]
+        b1 = self.arm1_params["b1"]
+        b2 = self.arm2_params["b2"]
+        J2zz_hat = self.arm2_params["J2zz_hat"]
+        g = 9.81  # [m/s^2]
+
+        # Derivative
+        gamma_1 = J1zz_hat + m2*(L1**2) + J2yy_hat*(np.sin(t2)**2) + J2xx*(np.cos(t2)**2)
+        gamma_2 = m2*L1*l2*np.cos(t2)
+        Gamma = np.array([[gamma_1, gamma_2],
+                          [gamma_2, J2zz_hat]])
+
+        phi_1 = tau_hat + m2*L1*l2*np.sin(t2)*(t2d**2) - t1d*t2d*np.sin(2*t2)*(J2yy_hat - J2xx) - b1*t1d
+        phi_2 = 0.5*(t1d**2)*np.sin(2*t2)*(J2yy_hat - J2xx) - b2*t2d - g*m2*l2*np.sin(t2)
+        Phi = np.array([phi_1, phi_2])
+
+        accel = np.linalg.solve(Gamma, Phi)
+
+        return np.array([t1d, accel[0], t2d, accel[1]])
+
+    def rk4_furata_step(self, state, dt, tau_hat, J2yy_hat, J2xx):
+        k1 = self.take_state_deriv(state, tau_hat, J2yy_hat, J2xx)
+        k2 = self.take_state_deriv(state + 0.5 * dt * k1, tau_hat, J2yy_hat, J2xx)
+        k3 = self.take_state_deriv(state + 0.5 * dt * k2, tau_hat, J2yy_hat, J2xx)
+        k4 = self.take_state_deriv(state + dt * k3, tau_hat, J2yy_hat, J2xx)
+        return state + (dt / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)
+
+    def simulate_furata(self, t, state0, tau_hat, J2yy_hat, J2xx):
+        """RK4-integrate the diff equ at the exact (possibly non-uniform) sample times in t."""
+        state = np.array(state0, dtype=float)
+        out = np.empty((len(t), 4))
+        out[0,:] = state
+        for i in range(len(t) - 1):
+            dt = t[i + 1] - t[i]
+            state = self.rk4_furata_step(state, dt, tau_hat[i], J2yy_hat, J2xx)
+            out[i+1, :] = state
+        return out
+
+    def simulate_runs(self):
+        """ For each run, copmare actual to forward simulation """
+        J2yy_hat = self.arm2_params["J2yy_hat"]
+        J2xx = self.arm2_params["J2xx"]
+        if not self.runs_parsed:
+            self.parse_runs()
+
+        for (name, run_list) in self.runs_dict.items():
+            for (i, run) in enumerate(run_list):
+                # Parse
+                t = np.array(run["time"])/1000.0
+                tau = np.array(run["used_tau_filt"])
+
+                t1 = np.array(run["pos"])
+                t2 = np.array(run["pend_pos"])
+                t1d = np.array(run["vel_filt"])
+                t2d = np.array(run["pend_vel_filt"])
+
+                state0 = np.array([t1[0], t1d[0], t2[0], t2d[0]])
+
+                # Forward simulation
+                t1dd = []
+                t2dd = []
+                cur_state = state0
+                for i in range(len(t)):
+                    cur_state = np.array([t1[i], t1d[i], t2[i], t2d[i]])
+                    cur_deriv = self.take_state_deriv(cur_state, tau[i], J2yy_hat, J2xx)
+                    t1dd.append(cur_deriv[1])
+                    t2dd.append(cur_deriv[3])
+                t1dd_sim = np.array(t1dd)
+                t2dd_sim = np.array(t2dd)
+                t1dd = np.array(run["accel_filt"])
+                t2dd = np.array(run["pend_accel_filt"])
+
+                out_sim = self.simulate_furata(t, state0, tau, J2yy_hat, J2xx)
+                t1_sim = out_sim[:, 0]
+                t1d_sim = out_sim[:, 1]
+                t2_sim = out_sim[:, 2]
+                t2d_sim = out_sim[:, 3]
+
+                # Compare to actual
+                residuals_t1 = (t1_sim - t1)**2
+                residuals_t2 = (t2_sim - t2)**2
+                residuals_t1d = (t1d_sim - t1d)**2
+                residuals_t2d = (t2d_sim - t2d)**2
+
+                # Plot MOTOR
+                fig, axs = plt.subplots(5,1, figsize=(12,7.5), sharex = True)
+                axs[0].plot(t, tau, label = "Tau input (compensated, filtered, used)", color = "red")
+                axs[0].set_ylabel("Torque (N-m)")
+                axs[0].set_title(f"Forward Simulation of {name}_{i} MOTOR")
+                axs[0].legend()
+                axs[0].grid(True, alpha=0.3)
+                
+                axs[1].plot(t, t1, label = "Measured")
+                axs[1].plot(t, t1_sim, label = "Predicted")
+                axs[1].set_ylabel("Position (rad)")
+                axs[1].legend()
+                axs[1].grid(True, alpha=0.3)
+
+                axs[2].plot(t, t1d, label = "Measured")
+                axs[2].plot(t, t1d_sim, label = "Predicted")
+                axs[2].set_ylabel("Velocity (rad/s)")
+                axs[2].legend()
+                axs[2].grid(True, alpha=0.3)
+
+                axs[3].plot(t, t1dd, label = "Measured")
+                axs[3].plot(t, t1dd_sim, label = "Predicted")
+                axs[3].set_ylabel("Accleration (rad/s^2)")
+                axs[3].legend()
+                axs[3].grid(True, alpha=0.3)
+        
+                axs[4].plot(t, residuals_t1, linewidth=1, color = "cyan", label = "Position Residual (rev^2)")
+                axs[4].plot(t, residuals_t1d, linewidth=1, color = "green", label = "Velocity Residual((rev/s)^2)")
+                axs[4].set_ylabel("Residual")
+                axs[4].set_xlabel("Time (ms)")
+                axs[4].set_title("Residuals")
+                axs[4].legend()
+                axs[4].grid(True, alpha=0.3)
+                fig.tight_layout()
+
+                # Plot PENDULUM
+                fig, axs = plt.subplots(5,1, figsize=(12,7.5), sharex = True)
+                axs[0].plot(t, tau, label = "Tau input (compensated, filtered, used)", color = "red")
+                axs[0].set_ylabel("Torque (N-m)")
+                axs[0].set_title(f"Forward Simulation of {name}_{i} PENDULUM")
+                axs[0].legend()
+                axs[0].grid(True, alpha=0.3)
+                
+                axs[1].plot(t, t2, marker = '.', label = "Measured")
+                axs[1].plot(t, t2_sim, marker = '.', label = "Predicted")
+                axs[1].set_ylabel("Position (rev)")
+                axs[1].legend()
+                axs[1].grid(True, alpha=0.3)
+
+                axs[2].plot(t, t2d, marker = '.', label = "Measured")
+                axs[2].plot(t, t2d_sim, marker = '.', label = "Predicted")
+                axs[2].set_ylabel("Velocity (rev/s)")
+                axs[2].legend()
+                axs[2].grid(True, alpha=0.3)
+
+                axs[3].plot(t, t2dd, marker = '.', label = "Measured")
+                axs[3].plot(t, t2dd_sim, marker = '.', label = "Predicted")
+                axs[3].set_ylabel("Accleration (rad/^2)")
+                axs[3].legend()
+                axs[3].grid(True, alpha=0.3)
+        
+                axs[4].plot(t, residuals_t2, linewidth=1, color = "cyan", label = "Position Residual (rad^2)")
+                axs[4].plot(t, residuals_t2d, linewidth=1, color = "green", label = "Velocity Residual((rad/s)^2)")
+                axs[4].set_ylabel("Residual")
+                axs[4].set_xlabel("Time (ms)")
+                axs[4].set_title("Residuals")
+                axs[4].legend()
+                axs[4].grid(True, alpha=0.3)
+                fig.tight_layout()
+
+                plt.show()
+
+    # ---------------------------------------------------------------------------
     # Method 1: derivative-based, linear least squares (with bounds via least_squares)
     # ---------------------------------------------------------------------------
     def fit_linear(self, debug = True, tau_source = "act", filter_bw = 100.0):
@@ -425,14 +595,14 @@ class FurataAnalyzer:
                 t1 = np.array(run["pos"])
                 t1d_raw = np.array(run["vel"])
                 t2 = np.array(run["pend_pos"])
-                t2d_raw = np.gradient(t2, 0.001)  # Don't use the Kalman filter
+                t2d_raw = np.gradient(t2, 0.001, edge_order=2)  # Don't use the Kalman filter
 
                 dt = np.mean(np.diff(time))
                 if not np.allclose(np.diff(time), dt, rtol=3.0):
                     raise ValueError("Method 1 requires (approximately) uniform sampling per run; "
                                     "resample/interpolate onto a uniform grid first.")
-                t1dd_raw = np.gradient(t1d_raw, 0.001)
-                t2dd_raw = np.gradient(t2d_raw, 0.001)
+                t1dd_raw = np.gradient(t1d_raw, 0.001, edge_order=2)
+                t2dd_raw = np.gradient(t2d_raw, 0.001, edge_order=2)
             
                 # Filter
                 self.linear_filter_bw = filter_bw
@@ -652,89 +822,6 @@ class FurataAnalyzer:
     # # ---------------------------------------------------------------------------
     # # Method 2: forward-simulation (RK4) with coulombic friction + nonlinear least squares
     # # ---------------------------------------------------------------------------
-
-    # """ SIMULATION """
-    # def motor_lhs(self, state, tau, J, b, f_s):
-    #     """ Deriv of state """
-    #     theta, omega = state
-    #     dtheta = omega
-    #     domega = self._evaluate_true_accel(omega, np.sign(omega), tau, J, b, f_s, eps=0.1)
-    #     return np.array([dtheta, domega])
-
-    # def rk4_motor_step(self, state, dt, tau, J, b, f_s):
-    #     k1 = self.motor_lhs(state, tau, J, b, f_s)
-    #     k2 = self.motor_lhs(state + 0.5 * dt * k1, tau, J, b, f_s)
-    #     k3 = self.motor_lhs(state + 0.5 * dt * k2, tau, J, b, f_s)
-    #     k4 = self.motor_lhs(state + dt * k3, tau, J, b, f_s)
-    #     return state + (dt / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)
-
-    # def simulate_motor(self, t, theta0, omega0, tau, J, b, f_s):
-    #     """RK4-integrate the diff equa at the exact (possibly non-uniform) sample times in t."""
-    #     state = np.array([theta0, omega0], dtype=float)
-    #     out = np.empty((len(t), 2))
-    #     out[0,:] = state
-    #     for i in range(len(t) - 1):
-    #         dt = t[i + 1] - t[i]
-    #         state = self.rk4_motor_step(state, dt, tau[i], J, b, f_s)
-    #         out[i+1, :] = state
-    #     return out
-
-    # def simulate_runs(self):
-    #     """ For each run, copmare actual to forward simulation """
-    #     J = self.motor_params["J"]
-    #     b = self.motor_params["b"]
-    #     f_s = self.motor_params["f_s"]
-    #     if not self.runs_parsed:
-    #         self.parse_runs()
-
-    #     for (name, run_list) in self.runs_dict.items():
-    #         for (i, run) in enumerate(run_list):
-    #             # Parse
-    #             t = np.array(run["time"])/1000.0
-    #             tau = np.array(run["used_tau_filt"])
-    #             theta = np.array(run["pos"])
-    #             omega = np.array(run["vel_filt"])
-
-    #             # Forward simulation
-    #             out_sim = self.simulate_motor(t, theta[0], omega[0], tau, J, b, f_s)
-    #             theta_sim = out_sim[:, 0]
-    #             omega_sim = out_sim[:, 1]
-
-    #             # Compare to actual
-    #             residuals_t = (theta_sim - theta)**2
-    #             residuals_td = (omega_sim - omega)**2
-
-    #             # Plot
-    #             fig, axs = plt.subplots(4,1, figsize=(12,7.5), sharex = True)
-    #             axs[0].plot(t, tau, label = "Tau input (compensated, filtered, used)", color = "red")
-    #             axs[0].set_ylabel("Torque (N-m)")
-    #             axs[0].set_title(f"Forward Simulation of {name}_{i}")
-    #             axs[0].legend()
-    #             axs[0].grid(True, alpha=0.3)
-                
-    #             axs[1].plot(t, theta, label = "Measured")
-    #             axs[1].plot(t, theta_sim, label = "Predicted")
-    #             axs[1].set_ylabel("Position (rev)")
-    #             axs[1].legend()
-    #             axs[1].grid(True, alpha=0.3)
-
-    #             axs[2].plot(t, omega, label = "Measured")
-    #             axs[2].plot(t, omega_sim, label = "Predicted")
-    #             axs[2].set_ylabel("Velocity (rev/s)")
-    #             axs[2].legend()
-    #             axs[2].grid(True, alpha=0.3)
-        
-    #             axs[3].plot(t, residuals_t, linewidth=1, color = "cyan", label = "Position Residual (rev^2)")
-    #             axs[3].plot(t, residuals_td, linewidth=1, color = "green", label = "Velocity Residual((rev/s)^2)")
-    #             axs[3].set_ylabel("Residual")
-    #             axs[3].set_xlabel("Time (ms)")
-    #             axs[3].set_title("Residuals")
-    #             axs[3].legend()
-    #             axs[3].grid(True, alpha=0.3)
-        
-    #             fig.tight_layout()
-        
-    #             plt.show()
     
     # """ FITTING """
     # def smooth_motor_lhs(self, state, tau, J, b, f_s, k = 100):
@@ -871,6 +958,15 @@ if __name__ == "__main__":
     # ### LINEAR FIT ###
     print("-----Linear-----")
     result = analyzer.fit_linear(debug=False, filter_bw = 25)
+    # analyzer.arm2_params["J2yy_hat"] = 0.0
+    # analyzer.arm2_params["J2xx"] = 0.0
+    # # analyzer.arm2_params["J2zz_hat"] = 0.0
+    # analyzer.arm2_params["b2"] = 0.0
+    # analyzer.arm2_params["L2"] = 0.0
+    # analyzer.arm2_params["l2"] = 0.0
+    analyzer.simulate_runs()
+
+
     # print(result)
     # # # analyzer.test_linear_fit()
     # # # analyzer.best_test_linear_fit()

@@ -273,6 +273,10 @@ class MotorAnalyzer:
         for filter in filter_list:
             log[f"{filter}_filt"] = self._implement_filtfilt(log[filter], cutoff_hz=self.tau_filter_bw)
 
+        # Convert units AFTER decog (which needs fractions of a rev for indexing)
+        log["pos"] *= 2.0*np.pi
+        log["vel"] *= 2.0*np.pi
+
     def _implement_filtfilt(self, signal, order = 2, cutoff_hz = 100, fs = 1000):
         nyquist = fs / 2.0
         normal_cutoff = cutoff_hz / nyquist
@@ -644,18 +648,18 @@ class MotorAnalyzer:
                 
                 axs[1].plot(t, theta, label = "Measured")
                 axs[1].plot(t, theta_sim, label = "Predicted")
-                axs[1].set_ylabel("Position (rev)")
+                axs[1].set_ylabel("Position (rad)")
                 axs[1].legend()
                 axs[1].grid(True, alpha=0.3)
 
                 axs[2].plot(t, omega, label = "Measured")
                 axs[2].plot(t, omega_sim, label = "Predicted")
-                axs[2].set_ylabel("Velocity (rev/s)")
+                axs[2].set_ylabel("Velocity (rad/s)")
                 axs[2].legend()
                 axs[2].grid(True, alpha=0.3)
         
-                axs[3].plot(t, residuals_t, linewidth=1, color = "cyan", label = "Position Residual (rev^2)")
-                axs[3].plot(t, residuals_td, linewidth=1, color = "green", label = "Velocity Residual((rev/s)^2)")
+                axs[3].plot(t, residuals_t, linewidth=1, color = "cyan", label = "Position Residual (rad^2)")
+                axs[3].plot(t, residuals_td, linewidth=1, color = "green", label = "Velocity Residual((rad/s)^2)")
                 axs[3].set_ylabel("Residual")
                 axs[3].set_xlabel("Time (ms)")
                 axs[3].set_title("Residuals")
@@ -854,7 +858,9 @@ if __name__ == "__main__":
     analyzer.parse_runs(doPlot=False)
     #analyzer.plot_raw_all()
 
-    # ### LINEAR FIT ###
+
+    """ FITS """
+    # # ### LINEAR FIT ###
     print("-----Linear-----")
     result = analyzer.fit_linear(debug=False, filter_bw = 25)
     print(result)
@@ -873,157 +879,9 @@ if __name__ == "__main__":
     header_path = savebase_path + "Teensy_ODrive_PIO/lib/config/m8325s_furata/"
     analyzer.output_configs(config_path, header_path)
 
-# from scipy.optimize import lsq_linear
-
-    # def fit_furuta_linear(self, debug=True, inclCoulomb=True, tau_source="act",
-    #                       filter_bw=100.0, trim=100, fixed=None, L1=None, g=9.81,
-    #                       w2=1.0, vel_eps=1e-2, q2_offset=0.0, q2_sign=1.0,
-    #                       pos2_key="pos2", vel2_key="vel2", tau2_key=None):
-    #     """
-    #     Linear least-squares fit of the Furuta pendulum parameters (Cazzolato & Prime, eq. 19),
-    #     using numerical differentiation + zero-phase filtering to get accelerations.
-
-    #     Lumped parameters identified:
-    #         P0    = J1zz + m1 l1^2 + m2 L1^2 + J2xx      (total inertia seen by the motor, incl. rotor)
-    #         K     = m2 l2^2 + J2yy - J2xx
-    #         C     = m2 L1 l2
-    #         J2hat = J2zz + m2 l2^2                        (pivot inertia; what your drop test measures)
-    #         G     = g m2 l2
-    #         b1, b2 (viscous), f1, f2 (Coulomb, optional)
-
-    #     fixed : dict of known params to hold constant, e.g. {"J2hat": 4.1e-3, "b2": 2.8e-4}
-    #     L1    : if given, enforces C = G*L1/g (removes one free parameter)
-    #     w2    : weight on the pendulum-row equation relative to the motor row
-    #     q2_offset, q2_sign : convert your encoder to the paper's convention
-    #                          (theta2 = 0 hanging down, CCW positive viewed from front)
-    #     tau2_key : run key for a disturbance torque on the pendulum (None -> tau2 = 0)
-    #     Returns: dict of identified parameters (std errors in self.furuta_param_std)
-    #     """
-    #     fixed = dict(fixed or {})
-    #     if not self.runs_parsed:
-    #         self.parse_runs()
-
-    #     tau1_key = {"act": "tau_act_decogged", "set": "tau_set_decogged"}.get(tau_source)
-    #     if tau1_key is None:
-    #         raise ValueError("This is not a valid tau_source")
-
-    #     names = ["P0", "K", "C", "J2hat", "b1", "b2", "G"]
-    #     if inclCoulomb:
-    #         names += ["f1", "f2"]
-    #     tie_CG = L1 is not None
-    #     if tie_CG:
-    #         if "C" in fixed:
-    #             raise ValueError("With L1 given, C is tied to G; fix G instead of C.")
-    #         names.remove("C")
-    #     bad = set(fixed) - set(names)
-    #     if bad:
-    #         raise ValueError(f"Unknown (or eliminated) fixed params: {bad}")
-
-    #     def regressors(q1d, q2, q2d, q1dd, q2dd):
-    #         s, c, s2 = np.sin(q2), np.cos(q2), np.sin(2 * q2)
-    #         z = np.zeros_like(q2)
-    #         sg1, sg2 = np.tanh(q1d / vel_eps), np.tanh(q2d / vel_eps)
-    #         r1 = dict(P0=q1dd, K=q1dd * s**2 + q1d * q2d * s2, C=q2dd * c - s * q2d**2,
-    #                   J2hat=z, b1=q1d, b2=z, G=z, f1=sg1, f2=z)
-    #         r2 = dict(P0=z, K=-0.5 * q1d**2 * s2, C=q1dd * c,
-    #                   J2hat=q2dd, b1=z, b2=q2d, G=s, f1=z, f2=sg2)
-    #         if tie_CG:  # C*colC + G*colG with C = G*L1/g  ->  G*(colG + colC*L1/g)
-    #             for r in (r1, r2):
-    #                 r["G"] = r["G"] + r["C"] * L1 / g
-    #         return (np.column_stack([r1[n] for n in names]),
-    #                 np.column_stack([r2[n] for n in names]))
-
-    #     blocks = []  # per run: (t, A1, y1, A2, y2)
-    #     for run_list in self.runs_dict.values():
-    #         for run in run_list:
-    #             t = np.asarray(run["time"], float)
-    #             dt = np.mean(np.diff(t))
-    #             if not np.allclose(np.diff(t), dt, rtol=0.05):
-    #                 raise ValueError("Requires (approximately) uniform sampling per run; "
-    #                                  "resample onto a uniform grid first.")
-
-    #             q1d_raw = np.asarray(run["vel"], float)
-    #             q2_raw = q2_sign * np.asarray(run[pos2_key], float) + q2_offset
-    #             q2d_raw = q2_sign * np.asarray(run[vel2_key], float)
-    #             tau1_raw = np.asarray(run[tau1_key], float)
-    #             tau2_raw = (q2_sign * np.asarray(run[tau2_key], float)) if tau2_key else np.zeros_like(t)
-
-    #             f = lambda x: self._implement_filtfilt(x, cutoff_hz=filter_bw)
-    #             q1d, q2, q2d = f(q1d_raw), f(q2_raw), f(q2d_raw)
-    #             q1dd = f(np.gradient(q1d_raw, dt))
-    #             q2dd = f(np.gradient(q2d_raw, dt))
-    #             tau1, tau2 = f(tau1_raw), f(tau2_raw)
-
-    #             sl = slice(trim, len(t) - trim) if trim else slice(None)  # drop filtfilt edge effects
-    #             q1d, q2, q2d, q1dd, q2dd, tau1, tau2, ts = [x[sl] for x in
-    #                                                          (q1d, q2, q2d, q1dd, q2dd, tau1, tau2, t)]
-    #             A1, A2 = regressors(q1d, q2, q2d, q1dd, q2dd)
-    #             blocks.append((ts, A1, tau1, A2, tau2))
-
-    #     A1 = np.vstack([b[1] for b in blocks]); y1 = np.concatenate([b[2] for b in blocks])
-    #     A2 = np.vstack([b[3] for b in blocks]); y2 = np.concatenate([b[4] for b in blocks])
-
-    #     # Move fixed parameters to the RHS
-    #     free = [i for i, n in enumerate(names) if n not in fixed]
-    #     fix = [i for i, n in enumerate(names) if n in fixed]
-    #     p_fix = np.array([fixed[names[i]] for i in fix])
-    #     if fix:
-    #         y1 = y1 - A1[:, fix] @ p_fix
-    #         y2 = y2 - A2[:, fix] @ p_fix
-    #     A1f, A2f = A1[:, free], A2[:, free]
-
-    #     # Column scaling (parameters span many orders of magnitude)
-    #     scale = np.sqrt(np.mean(np.vstack([A1f, A2f]) ** 2, axis=0))
-    #     scale[scale == 0] = 1.0
-    #     A = np.vstack([A1f / scale, w2 * A2f / scale])
-    #     y = np.concatenate([y1, w2 * y2])
-
-    #     lb = np.array([1e-12 if names[i] in ("P0", "J2hat") else 0.0 for i in free])
-    #     result = lsq_linear(A, y, bounds=(lb, np.full(len(free), np.inf)))
-    #     p_free = result.x / scale
-
-    #     # Approximate standard errors (ignores active bounds; filtered residuals are correlated,
-    #     # so treat these as optimistic)
-    #     dof = max(len(y) - len(free), 1)
-    #     s2 = np.sum(result.fun ** 2) / dof
-    #     cov = s2 * np.linalg.pinv(A.T @ A)
-    #     std_free = np.sqrt(np.diag(cov)) / scale
-
-    #     params = dict(zip(names, np.zeros(len(names))))
-    #     for i, v in zip(fix, p_fix):
-    #         params[names[i]] = v
-    #     std = {n: 0.0 for n in names}
-    #     for i, v, s in zip(free, p_free, std_free):
-    #         params[names[i]], std[names[i]] = v, s
-    #     if tie_CG:
-    #         params["C"] = params["G"] * L1 / g
-    #         std["C"] = std["G"] * L1 / g
-
-    #     # Derived quantities
-    #     params["m2_l2"] = params["G"] / g                     # m2*l2
-    #     params["K_minus_J2hat"] = params["K"] - params["J2hat"]  # = J2yy - J2zz - J2xx (~0 for slender symmetric rod)
-
-    #     self.furuta_params = params
-    #     self.furuta_param_std = std
-    #     self.furuta_cond = np.linalg.cond(A)
-
-    #     if debug:
-    #         print(f"cond(A) = {self.furuta_cond:.2e}")
-    #         for n in names:
-    #             tag = " (fixed)" if n in fixed else ""
-    #             print(f"{n:>6s} = {params[n]: .4e} ± {std[n]:.1e}{tag}")
-    #         print(f"K - J2hat = {params['K_minus_J2hat']:.3e}   m2*l2 = {params['m2_l2']:.4e}")
-
-    #         p_full = np.array([params[n] for n in names])
-    #         for k, (ts, B1, t1, B2, t2) in enumerate(blocks):
-    #             fig, axs = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
-    #             axs[0].plot(ts, t1, label="tau1 measured (decogged)", color="black")
-    #             axs[0].plot(ts, B1 @ p_full, "--", label="row 1 model")
-    #             axs[1].plot(ts, t2, label="tau2 (0 if none)", color="black")
-    #             axs[1].plot(ts, B2 @ p_full, "--", label="row 2 model")
-    #             for ax in axs:
-    #                 ax.grid(True, alpha=0.3); ax.legend()
-    #             axs[0].set_title(f"Run {k}")
-    #             plt.show()
-
-    #     return params
+    # """ EVAL KNOWN FIT """
+    # analyzer.motor_params["L_1"] = 0.145 # [m]
+    # analyzer.motor_params["J"] =  0.02021335960815631
+    # analyzer.motor_params["b"] = 0.002841861601584668
+    # analyzer.motor_params["f_s"] = 0.053858875352416104
+    # analyzer.simulate_runs()
