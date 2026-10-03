@@ -34,6 +34,7 @@ from scipy.optimize import least_squares
 from scipy.signal import savgol_filter, butter, filtfilt
 from pathlib import Path
 import matplotlib.pyplot as plt
+import json
 
 class PendulumAnalyzer:
 
@@ -363,6 +364,39 @@ class PendulumAnalyzer:
     
             plt.show()
 
+    """ Save results """
+    def save_linear_params(self, J, b, m, l, L_tot):
+        self.pend_params = {
+            "J2zz_hat": J,
+            "b2": b,
+            "m2": m,
+            "l2": l,
+            "L_2": L_tot
+        }
+
+    def output_configs(self, config_path, header_path):
+        # JSON (for Python scripts)
+        self.config_folder = Path(config_path)
+        self.config_folder.mkdir(parents=True, exist_ok=True)
+        self.motor_json = self.config_folder / "arm2.json"
+        self.motor_json.write_text(json.dumps(self.pend_params, indent=2))
+
+        # HEADERS (for CPP scripts)
+        self.header_path = Path(header_path)
+        self.header_path.mkdir(parents=True, exist_ok=True)
+        header_file = self.header_path / "arm2.hpp"
+        with open(header_file, "w") as f:
+            f.write("#pragma once\n\n")
+            f.write("namespace Arm2Config {\n\n")
+            f.write(f"constexpr float J2zz_hat = {self.pend_params["J2zz_hat"]:.4f};\n\n")
+            f.write(f"constexpr float b2 = {self.pend_params["b2"]:.4f}; \n\n")
+            f.write(f"constexpr float m2 = {self.pend_params["m2"]:.4f};\n\n")
+            f.write(f"constexpr float l2 = {self.pend_params["l2"]:.4f};\n\n")
+            f.write(f"constexpr float L_2 = {self.pend_params["L_2"]:.4f};\n\n")
+            f.write("} // namespace Arm2Config\n")
+
+        print(f"Wrote {self.header_path}")
+
 
 # ---------------------------------------------------------------------------
 # Fit dat data
@@ -397,9 +431,17 @@ if __name__ == "__main__":
     J_n_fit, b_n_fit = nonlinear_fit.x
     print(f"Result of NON-Linear Method: J = {J_n_fit}, b = {b_n_fit}")
 
-    analyzer.test_fit(J_n_fit, b_n_fit, (m*g*l))
+    #analyzer.test_fit(J_n_fit, b_n_fit, (m*g*l))
 
     print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
+
+    # Save results
+    L_2 = (150.83186 - 3)/1000.0
+    analyzer.save_linear_params(J_n_fit, b_n_fit, m, l, L_2)
+    savebase_path = "/Users/trevorperey/Desktop/PersonalProjects/ros2_odrive_personal/"
+    config_path = savebase_path + "config/m8325s_furata/"
+    header_path = savebase_path + "Teensy_ODrive_PIO/lib/config/m8325s_furata/"
+    analyzer.output_configs(config_path, header_path)
 
     """ Non-linear fit, with friction """
     # k_to_use = 10

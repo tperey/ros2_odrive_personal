@@ -782,6 +782,36 @@ class MotorAnalyzer:
         }
         return result
 
+    """ Save results """
+    def output_configs(self, config_path, header_path):
+
+            # JSON (for Python scripts)
+            motor_params_to_save = {
+                "J1zz_hat": self.motor_params["J"],
+                "b1": self.motor_params["b"],
+                "fs1": self.motor_params["f_s"],
+                "L_1": self.motor_params["L_1"]
+            }
+            self.config_folder = Path(config_path)
+            self.config_folder.mkdir(parents=True, exist_ok=True)
+            self.motor_json = self.config_folder / "arm1.json"
+            self.motor_json.write_text(json.dumps(motor_params_to_save, indent=2))
+    
+            # HEADERS (for CPP scripts)
+            self.header_path = Path(header_path)
+            self.header_path.mkdir(parents=True, exist_ok=True)
+            header_file = self.header_path / "arm1.hpp"
+            with open(header_file, "w") as f:
+                f.write("#pragma once\n\n")
+                f.write("namespace Arm1Config {\n\n")
+                f.write(f"constexpr float J1zz_hat = {self.motor_params["J"]:.4f};\n\n")
+                f.write(f"constexpr float b1 = {self.motor_params["b"]:.4f}; \n\n")
+                f.write(f"constexpr float fs1 = {self.motor_params["f_s"]:.4f};\n\n")
+                f.write(f"constexpr float L_1 = {self.motor_params["L_1"]:.4f};\n\n")
+                f.write("} // namespace Arm1Config\n")
+    
+            print(f"Wrote {self.header_path}")
+
 # ---------------------------------------------------------------------------
 # Fit dat data
 # ---------------------------------------------------------------------------
@@ -791,31 +821,57 @@ if __name__ == "__main__":
     cog_path = "/Users/trevorperey/Desktop/PersonalProjects/ros2_odrive_personal/config/m8325s_furata/cogging_map.json"
     one_example = base_path + "sinetau_nocog_motoronly_001/logs_20260823_211700.pkl"
 
+    """ Motor Only """
+    # analyzer = MotorAnalyzer(cog_path, tau_filter_bw=50)
+    # # analyzer.add_all_logs(base_path, identifier="cogd_motoronly")
+    # analyzer.add_all_logs(base_path, identifier="motoronly")
+    # analyzer.parse_runs(doPlot=False)
+    # #analyzer.plot_raw_all()
+    # analyzer.cut_run("sinetau_cogd_motoronly_001", 4)
+    # analyzer.cut_run("sinetau_nocog_motoronly_001", 4)
+
+    # ### LINEAR FIT ###
+    # print("-----Linear-----")
+    # result = analyzer.fit_linear(debug=False, filter_bw = 25)
+    # print(result)
+    # # # analyzer.test_linear_fit()
+    # # # analyzer.best_test_linear_fit()
+    # # # analyzer.optimize_linear_fit()
+    # # analyzer.simulate_runs()
+    # # analyzer.motor_params["f_s"] = 0.055  # Seems to lead to a better velocity fit in some cases, and aligns with cogging experiment
+    # # analyzer.simulate_runs()
+
+    # ### NONLINEAR FIT ###
+    # print()
+    # print("-----Nonlinear-----")
+    # result = analyzer.fit_nonlinear(2.0e-3, 2.0e-17, 5.0e-2, filter_bw = 25, fit_source="pos")
+    # print(result)
+    # analyzer.simulate_runs()
+
+    """ Lets try with the Arm on there! Assumes no pendulum, but maybe not too bad an assumption? """
     analyzer = MotorAnalyzer(cog_path, tau_filter_bw=50)
-    # analyzer.add_all_logs(base_path, identifier="cogd_motoronly")
-    analyzer.add_all_logs(base_path, identifier="motoronly")
+    analyzer.add_all_logs(base_path, identifier="all")
     analyzer.parse_runs(doPlot=False)
     #analyzer.plot_raw_all()
-    analyzer.cut_run("sinetau_cogd_motoronly_001", 4)
-    analyzer.cut_run("sinetau_nocog_motoronly_001", 4)
 
-    ### LINEAR FIT ###
+    # ### LINEAR FIT ###
     print("-----Linear-----")
     result = analyzer.fit_linear(debug=False, filter_bw = 25)
     print(result)
-    # # analyzer.test_linear_fit()
-    # # analyzer.best_test_linear_fit()
-    # # analyzer.optimize_linear_fit()
-    # analyzer.simulate_runs()
-    # analyzer.motor_params["f_s"] = 0.055  # Seems to lead to a better velocity fit in some cases, and aligns with cogging experiment
-    # analyzer.simulate_runs()
 
-    ### NONLINEAR FIT ###
+    # ### NONLINEAR FIT ###
     print()
     print("-----Nonlinear-----")
-    result = analyzer.fit_nonlinear(2.0e-3, 2.0e-17, 5.0e-2, filter_bw = 25)
+    result = analyzer.fit_nonlinear(2.0e-2, 3.0e-3, 5.0e-2, filter_bw = 25, fit_source="vel")
     print(result)
-    analyzer.simulate_runs()
+    #analyzer.simulate_runs()
+
+    # Save result
+    analyzer.motor_params["L_1"] = 0.145  # [m]
+    savebase_path = "/Users/trevorperey/Desktop/PersonalProjects/ros2_odrive_personal/"
+    config_path = savebase_path + "config/m8325s_furata/"
+    header_path = savebase_path + "Teensy_ODrive_PIO/lib/config/m8325s_furata/"
+    analyzer.output_configs(config_path, header_path)
 
 # from scipy.optimize import lsq_linear
 
