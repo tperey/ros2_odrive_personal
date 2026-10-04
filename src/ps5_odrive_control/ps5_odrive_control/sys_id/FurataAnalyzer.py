@@ -392,6 +392,16 @@ class FurataAnalyzer:
     # ---------------------------------------------------------------------------
     
     # """ SIMULATION """
+    def _gradient_padded(self, x, dt, pad=10):
+        """
+        np.gradient with reflect-padding so every real sample gets a proper
+        central-difference estimate -- no real sample is ever treated as
+        a true array boundary.
+        """
+        x_padded = np.pad(x, pad, mode='reflect')
+        dx_padded = np.gradient(x_padded, dt, edge_order=2)
+        return dx_padded[pad:-pad]   # back to original length, no fake values kept
+
 
     def take_state_deriv(self, state, tau_hat, J2yy_hat, J2xx):
         """ Deriv of state """
@@ -595,14 +605,14 @@ class FurataAnalyzer:
                 t1 = np.array(run["pos"])
                 t1d_raw = np.array(run["vel"])
                 t2 = np.array(run["pend_pos"])
-                t2d_raw = np.gradient(t2, 0.001, edge_order=2)  # Don't use the Kalman filter
+                t2d_raw = self._gradient_padded(t2, 0.001)#np.gradient(t2, 0.001, edge_order=2)  # Don't use the Kalman filter
 
                 dt = np.mean(np.diff(time))
                 if not np.allclose(np.diff(time), dt, rtol=3.0):
                     raise ValueError("Method 1 requires (approximately) uniform sampling per run; "
                                     "resample/interpolate onto a uniform grid first.")
-                t1dd_raw = np.gradient(t1d_raw, 0.001, edge_order=2)
-                t2dd_raw = np.gradient(t2d_raw, 0.001, edge_order=2)
+                t1dd_raw = self._gradient_padded(t1d_raw, 0.001)#np.gradient(t1d_raw, 0.001, edge_order=2)
+                t2dd_raw = self._gradient_padded(t2d_raw, 0.001)#np.gradient(t2d_raw, 0.001, edge_order=2)
             
                 # Filter
                 self.linear_filter_bw = filter_bw
@@ -952,7 +962,7 @@ if __name__ == "__main__":
     analyzer = FurataAnalyzer(cog_path, tau_filter_bw=25)
     analyzer.load_params_from_configs(config_path=config_path)
     analyzer.add_all_logs(base_path, identifier="all")
-    analyzer.parse_runs(doPlot=False)
+    analyzer.parse_runs(doPlot=False, trim = 10)
     #analyzer.plot_raw_all()
 
     # ### LINEAR FIT ###
