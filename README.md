@@ -1,7 +1,8 @@
 TODO:
 Sys ID
 *Most prominent
---Consider bringing in static friction on pendulum
+--Consider bringing in static friction on pendulum FIT
+--Allow for fitting J1 in FurataAnalyzer
 *For pendulum
 --Residuals seem exactly aligned with missing coulomb friction. Try a tanh or constant friction term? WON'T BE ABLE TO USE LQR!
 --Could optimize filter params with linear method to minimize residual? PROB DON'T CARE

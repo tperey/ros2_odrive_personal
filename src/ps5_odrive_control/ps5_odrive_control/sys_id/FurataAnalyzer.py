@@ -423,7 +423,6 @@ class FurataAnalyzer:
 
         fs2 = 0.0
         if 'fs2' in self.arm2_params.keys():
-            print("Using fs2!")
             fs2 = self.arm2_params['fs2']
 
         # Derivative
@@ -970,7 +969,7 @@ if __name__ == "__main__":
 
     analyzer = FurataAnalyzer(cog_path, tau_filter_bw=25)
     analyzer.load_params_from_configs(config_path=config_path, withFs=True)
-    analyzer.add_all_logs(base_path, identifier="all")
+    analyzer.add_all_logs(base_path, identifier="generated")
     analyzer.parse_runs(doPlot=False, trim = 10)
     #analyzer.plot_raw_all()
 
