@@ -365,7 +365,7 @@ class PendulumAnalyzer:
             plt.show()
 
     """ Save results """
-    def save_linear_params(self, J, b, m, l, L_tot):
+    def save_linear_params(self, J, b, m, l, L_tot, f_s = 0.0):
         self.pend_params = {
             "J2zz_hat": J,
             "b2": b,
@@ -373,6 +373,9 @@ class PendulumAnalyzer:
             "l2": l,
             "L_2": L_tot
         }
+
+        if f_s:
+            self.pend_params['fs2'] = f_s
 
     def output_configs(self, config_path, header_path):
         # JSON (for Python scripts)
@@ -393,6 +396,30 @@ class PendulumAnalyzer:
             f.write(f"constexpr float m2 = {self.pend_params["m2"]:.4f};\n\n")
             f.write(f"constexpr float l2 = {self.pend_params["l2"]:.4f};\n\n")
             f.write(f"constexpr float L_2 = {self.pend_params["L_2"]:.4f};\n\n")
+            f.write("} // namespace Arm2Config\n")
+
+        print(f"Wrote {self.header_path}")
+
+    def output_fs_configs(self, config_path, header_path):
+        # JSON (for Python scripts)
+        self.config_folder = Path(config_path)
+        self.config_folder.mkdir(parents=True, exist_ok=True)
+        self.motor_json = self.config_folder / "arm2_fs.json"
+        self.motor_json.write_text(json.dumps(self.pend_params, indent=2))
+
+        # HEADERS (for CPP scripts)
+        self.header_path = Path(header_path)
+        self.header_path.mkdir(parents=True, exist_ok=True)
+        header_file = self.header_path / "arm2_fs.hpp"
+        with open(header_file, "w") as f:
+            f.write("#pragma once\n\n")
+            f.write("namespace Arm2Config {\n\n")
+            f.write(f"constexpr float J2zz_hat = {self.pend_params["J2zz_hat"]:.4f};\n\n")
+            f.write(f"constexpr float b2 = {self.pend_params["b2"]:.4f}; \n\n")
+            f.write(f"constexpr float m2 = {self.pend_params["m2"]:.4f};\n\n")
+            f.write(f"constexpr float l2 = {self.pend_params["l2"]:.4f};\n\n")
+            f.write(f"constexpr float L_2 = {self.pend_params["L_2"]:.4f};\n\n")
+            f.write(f"constexpr float fs2 = {self.pend_params["fs2"]:.4f};\n\n")
             f.write("} // namespace Arm2Config\n")
 
         print(f"Wrote {self.header_path}")
@@ -444,10 +471,20 @@ if __name__ == "__main__":
     analyzer.output_configs(config_path, header_path)
 
     """ Non-linear fit, with friction """
-    # k_to_use = 10
-    # fs_nonlinear_fit = analyzer.fit_fs_nonlinear((m*g*l), 1e-4, 1e-4, 0.001, 0.0, k_to_use)
+    k_to_use = 10
+    fs_nonlinear_fit = analyzer.fit_fs_nonlinear((m*g*l), 1e-4, 1e-4, 0.001, 0.0, k_to_use)
 
-    # Jnfs_fit, bnfs_fit, fs_fit = fs_nonlinear_fit.x
-    # print(f"Result of Nonlinear method WITH FRICTION: J = {Jnfs_fit}, b = {bnfs_fit}, fs = {fs_fit}")
+    Jnfs_fit, bnfs_fit, fs_fit = fs_nonlinear_fit.x
+    print(f"Result of Nonlinear method WITH FRICTION: J = {Jnfs_fit}, b = {bnfs_fit}, fs = {fs_fit}")
 
-    # analyzer.test_fs_fit(Jnfs_fit, bnfs_fit, (m*g*l), fs_fit, k_to_use)
+    #analyzer.test_fs_fit(Jnfs_fit, bnfs_fit, (m*g*l), fs_fit, k_to_use)
+
+    print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
+    
+    # Save results
+    L_2 = (150.83186 - 3)/1000.0
+    analyzer.save_linear_params(Jnfs_fit, bnfs_fit, m, l, L_2, fs_fit)
+    savebase_path = "/Users/trevorperey/Desktop/PersonalProjects/ros2_odrive_personal/"
+    config_path = savebase_path + "config/m8325s_furata/"
+    header_path = savebase_path + "Teensy_ODrive_PIO/lib/config/m8325s_furata/"
+    analyzer.output_fs_configs(config_path, header_path)
