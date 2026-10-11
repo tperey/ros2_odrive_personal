@@ -75,6 +75,12 @@ class FurataAnalyzer:
         self.end_dict = {}
         self.runs_dict = {}
 
+        # Config storage
+        self.arm1_json = None
+        self.arm2_json = None
+        self.config_folder = None
+        self._withFs = None
+
     def add_all_logs(self, top_path, identifier = "motoronly"):
         """
         Recursively search root for all folders whose name contains `identifier`.
@@ -269,18 +275,127 @@ class FurataAnalyzer:
 
         self.runs_parsed = True
 
-    def load_params_from_configs(self, config_path, withFs = False):
+    def filter_runs(self, debug = False, tau_source = "act", filter_bw = 25.0):
+        """
+        Uses numerical diff and filtering to generate velocities and alphas for every run
+        """
 
+        if not self.runs_parsed:
+            self.parse_runs()
+
+        for run_list in self.runs_dict.values():
+            for run in run_list:
+
+                """First, parse DATA """
+                time = np.array(run["time"])
+                if tau_source == "act":
+                    tau_raw = np.array(run["tau_act_compensated"])
+                elif tau_source == "set":
+                    tau_raw = np.array(run["tau_set_compensated"])
+                else:
+                    raise ValueError("This is not a valid tau_source")
+                t1 = np.array(run["pos"])
+                t1d_raw = np.array(run["vel"])
+                t2 = np.array(run["pend_pos"])
+                t2d_raw = self._gradient_padded(t2, 0.001)#np.gradient(t2, 0.001, edge_order=2)  # Don't use the Kalman filter
+
+                dt = np.mean(np.diff(time))
+                if not np.allclose(np.diff(time), dt, rtol=3.0):
+                    raise ValueError("Method 1 requires (approximately) uniform sampling per run; "
+                                    "resample/interpolate onto a uniform grid first.")
+                t1dd_raw = self._gradient_padded(t1d_raw, 0.001)#np.gradient(t1d_raw, 0.001, edge_order=2)
+                t2dd_raw = self._gradient_padded(t2d_raw, 0.001)#np.gradient(t2d_raw, 0.001, edge_order=2)
+            
+                # Filter
+                self.linear_filter_bw = filter_bw
+                t1d = self._implement_filtfilt(t1d_raw, cutoff_hz=filter_bw)
+                t2d = self._implement_filtfilt(t2d_raw, cutoff_hz=filter_bw)
+                t1dd = self._implement_filtfilt(t1dd_raw, cutoff_hz=filter_bw)
+                t2dd = self._implement_filtfilt(t2dd_raw, cutoff_hz=filter_bw)
+                tau_hat = self._implement_filtfilt(tau_raw, cutoff_hz=filter_bw)
+
+                run["vel_filt"] = t1d  # Save for eval
+                run["accel_filt"] = t1dd
+                run["pend_vel_filt"] = t2d
+                run["pend_accel_filt"] = t2dd
+                run["used_tau_filt"] = tau_hat
+
+    def load_params_from_configs(self, config_path, withFs = False):
         config_folder = Path(config_path)
-        arm1_json = config_folder / "arm1.json"
         if not withFs:
+            arm1_json = config_folder / "arm1.json"
             arm2_json = config_folder / "arm2.json"
         else:
+            arm1_json = config_folder / "arm1_fs.json"
             arm2_json = config_folder / "arm2_fs.json"
-
 
         self.arm1_params = json.loads(arm1_json.read_text())
         self.arm2_params = json.loads(arm2_json.read_text())
+
+        self.arm1_json = arm1_json  # For future logging
+        self.arm2_json = arm2_json
+        self.config_folder = config_folder
+        self._withFs = withFs
+
+    def store_params_to_configs(self, header_path):
+        if not self.arm1_json or not self.arm2_json:
+            print("Must load params to store them")
+            return
+               
+        # JSON (for Python scripts)
+        self.arm1_json.write_text(json.dumps(self.arm1_params, indent=2))
+        self.arm2_json.write_text(json.dumps(self.arm2_params, indent=2))
+
+        # # HEADERS (for CPP scripts)
+        self.header_path = Path(header_path)
+        self.header_path.mkdir(parents=True, exist_ok=True)
+        if self._withFs:
+            header_file = self.header_path / "arm1_fs.hpp"
+            with open(header_file, "w") as f:
+                f.write("#pragma once\n\n")
+                f.write("namespace Arm1Config {\n\n")
+                f.write(f"constexpr float J1zz_hat = {self.arm1_params["J1zz_hat"]:.4f};\n\n")
+                f.write(f"constexpr float b1 = {self.arm1_params["b1"]:.4f}; \n\n")
+                f.write(f"constexpr float fs1 = {self.arm1_params["fs1"]:.4f};\n\n")
+                f.write(f"constexpr float L_1 = {self.arm1_params["L_1"]:.4f};\n\n")
+                f.write("} // namespace Arm1Config\n")
+            header_file = self.header_path / "arm2_fs.hpp"
+            with open(header_file, "w") as f:
+                f.write("#pragma once\n\n")
+                f.write("namespace Arm2Config {\n\n")
+                f.write(f"constexpr float J2zz_hat = {self.arm2_params["J2zz_hat"]:.4f};\n\n")
+                f.write(f"constexpr float J2yy_hat = {self.arm2_params["J2yy_hat"]:.4f};\n\n")
+                f.write(f"constexpr float J2xx = {self.arm2_params["J2xx"]:.4f};\n\n")
+                f.write(f"constexpr float b2 = {self.arm2_params["b2"]:.4f}; \n\n")
+                f.write(f"constexpr float m2 = {self.arm2_params["m2"]:.4f};\n\n")
+                f.write(f"constexpr float l2 = {self.arm2_params["l2"]:.4f};\n\n")
+                f.write(f"constexpr float L_2 = {self.arm2_params["L_2"]:.4f};\n\n")
+                f.write(f"constexpr float fs2 = {self.arm2_params["fs2"]:.4f};\n\n")
+                f.write("} // namespace Arm2Config\n")
+        else:
+            header_file = self.header_path / "arm1.hpp"
+            with open(header_file, "w") as f:
+                f.write("#pragma once\n\n")
+                f.write("namespace Arm1Config {\n\n")
+                f.write(f"constexpr float J1zz_hat = {self.arm1_params["J1zz_hat"]:.4f};\n\n")
+                f.write(f"constexpr float b1 = {self.arm1_params["b1"]:.4f}; \n\n")
+                f.write(f"constexpr float fs1 = {self.arm1_params["fs1"]:.4f};\n\n")
+                f.write(f"constexpr float L_1 = {self.arm1_params["L_1"]:.4f};\n\n")
+                f.write("} // namespace Arm1Config\n")
+            header_file = self.header_path / "arm2.hpp"
+            with open(header_file, "w") as f:
+                f.write("#pragma once\n\n")
+                f.write("namespace Arm2Config {\n\n")
+                f.write(f"constexpr float J2zz_hat = {self.arm2_params["J2zz_hat"]:.4f};\n\n")
+                f.write(f"constexpr float J2yy_hat = {self.arm2_params["J2yy_hat"]:.4f};\n\n")
+                f.write(f"constexpr float J2xx = {self.arm2_params["J2xx"]:.4f};\n\n")
+                f.write(f"constexpr float b2 = {self.arm2_params["b2"]:.4f}; \n\n")
+                f.write(f"constexpr float m2 = {self.arm2_params["m2"]:.4f};\n\n")
+                f.write(f"constexpr float l2 = {self.arm2_params["l2"]:.4f};\n\n")
+                f.write(f"constexpr float L_2 = {self.arm2_params["L_2"]:.4f};\n\n")
+                f.write("} // namespace Arm2Config\n")
+
+        print(f"Wrote {self.header_path}")
 
     # ---------------------------------------------------------------------------
     # Filtering and other helpers
@@ -407,12 +522,12 @@ class FurataAnalyzer:
         return dx_padded[pad:-pad]   # back to original length, no fake values kept
 
 
-    def take_state_deriv(self, state, tau_hat, J2yy_hat, J2xx):
+    def take_state_deriv(self, state, tau_hat, J2yy_hat, J2xx, J1zz_hat):
         """ Deriv of state """
         # Unpack
         t1, t1d, t2, t2d = state
 
-        J1zz_hat = self.arm1_params["J1zz_hat"]
+        #J1zz_hat = self.arm1_params["J1zz_hat"]
         m2 = self.arm2_params["m2"]
         L1 = self.arm1_params["L_1"]
         l2 = self.arm2_params["l2"]
@@ -439,21 +554,21 @@ class FurataAnalyzer:
 
         return np.array([t1d, accel[0], t2d, accel[1]])
 
-    def rk4_furata_step(self, state, dt, tau_hat, J2yy_hat, J2xx):
-        k1 = self.take_state_deriv(state, tau_hat, J2yy_hat, J2xx)
-        k2 = self.take_state_deriv(state + 0.5 * dt * k1, tau_hat, J2yy_hat, J2xx)
-        k3 = self.take_state_deriv(state + 0.5 * dt * k2, tau_hat, J2yy_hat, J2xx)
-        k4 = self.take_state_deriv(state + dt * k3, tau_hat, J2yy_hat, J2xx)
+    def rk4_furata_step(self, state, dt, tau_hat, J2yy_hat, J2xx, J1zz_hat):
+        k1 = self.take_state_deriv(state, tau_hat, J2yy_hat, J2xx, J1zz_hat)
+        k2 = self.take_state_deriv(state + 0.5 * dt * k1, tau_hat, J2yy_hat, J2xx, J1zz_hat)
+        k3 = self.take_state_deriv(state + 0.5 * dt * k2, tau_hat, J2yy_hat, J2xx, J1zz_hat)
+        k4 = self.take_state_deriv(state + dt * k3, tau_hat, J2yy_hat, J2xx, J1zz_hat)
         return state + (dt / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)
 
-    def simulate_furata(self, t, state0, tau_hat, J2yy_hat, J2xx):
+    def simulate_furata(self, t, state0, tau_hat, J2yy_hat, J2xx, J1zz_hat):
         """RK4-integrate the diff equ at the exact (possibly non-uniform) sample times in t."""
         state = np.array(state0, dtype=float)
         out = np.empty((len(t), 4))
         out[0,:] = state
         for i in range(len(t) - 1):
             dt = t[i + 1] - t[i]
-            state = self.rk4_furata_step(state, dt, tau_hat[i], J2yy_hat, J2xx)
+            state = self.rk4_furata_step(state, dt, tau_hat[i], J2yy_hat, J2xx, J1zz_hat)
             out[i+1, :] = state
         return out
 
@@ -461,6 +576,7 @@ class FurataAnalyzer:
         """ For each run, copmare actual to forward simulation """
         J2yy_hat = self.arm2_params["J2yy_hat"]
         J2xx = self.arm2_params["J2xx"]
+        J1zz_hat = self.arm1_params["J1zz_hat"]
         if not self.runs_parsed:
             self.parse_runs()
 
@@ -483,7 +599,7 @@ class FurataAnalyzer:
                 cur_state = state0
                 for i in range(len(t)):
                     cur_state = np.array([t1[i], t1d[i], t2[i], t2d[i]])
-                    cur_deriv = self.take_state_deriv(cur_state, tau[i], J2yy_hat, J2xx)
+                    cur_deriv = self.take_state_deriv(cur_state, tau[i], J2yy_hat, J2xx, J1zz_hat)
                     t1dd.append(cur_deriv[1])
                     t2dd.append(cur_deriv[3])
                 t1dd_sim = np.array(t1dd)
@@ -491,7 +607,7 @@ class FurataAnalyzer:
                 t1dd = np.array(run["accel_filt"])
                 t2dd = np.array(run["pend_accel_filt"])
 
-                out_sim = self.simulate_furata(t, state0, tau, J2yy_hat, J2xx)
+                out_sim = self.simulate_furata(t, state0, tau, J2yy_hat, J2xx, J1zz_hat)
                 t1_sim = out_sim[:, 0]
                 t1d_sim = out_sim[:, 1]
                 t2_sim = out_sim[:, 2]
@@ -578,7 +694,7 @@ class FurataAnalyzer:
     # ---------------------------------------------------------------------------
     # Method 1: derivative-based, linear least squares (with bounds via least_squares)
     # ---------------------------------------------------------------------------
-    def fit_linear(self, debug = True, tau_source = "act", filter_bw = 100.0):
+    def fit_linear_noJ1(self, debug = True, tau_source = "act", filter_bw = 100.0):
         """
         Uses numerical diff and filtering to get alpha.
         Returns: OptimizeResult from least_squares (result.x = [J, b, f_s])
@@ -598,6 +714,10 @@ class FurataAnalyzer:
         b2 = self.arm2_params["b2"]
         J2zz_hat = self.arm2_params["J2zz_hat"]
         g = 9.81  # [m/s^2]
+
+        fs2 = 0.0
+        if 'fs2' in self.arm2_params.keys():
+            fs2 = self.arm2_params['fs2']
 
         for run_list in self.runs_dict.values():
             for run in run_list:
@@ -651,7 +771,7 @@ class FurataAnalyzer:
                 G = g*m2*l2
 
                 y1 = tau_hat - t1dd*P0p - t2dd*C*np.cos(t2) + C*np.sin(t2)*(t2d**2) - b1*t1d
-                y2 = -t1dd*C*np.cos(t2) - t2dd*J2zz_hat - b2*t2d - G*np.sin(t2)
+                y2 = -t1dd*C*np.cos(t2) - t2dd*J2zz_hat - b2*t2d - G*np.sin(t2) - fs2*np.tanh(100*t2d)
                 y_blocks.append(np.concatenate([y1, y2]))                            # RHS
 
                 if debug:
@@ -670,6 +790,10 @@ class FurataAnalyzer:
         A = np.vstack(A_blocks)
         y = np.concatenate(y_blocks)
 
+        # Check conditioning
+        A_norm = A / np.linalg.norm(A, axis=0)
+        print(f"A condition number: {np.linalg.cond(A_norm)}")
+
         def residuals(params):
             J2yy_hat, J2xx = params
             return A @ np.array([J2yy_hat, J2xx]) - y
@@ -678,12 +802,134 @@ class FurataAnalyzer:
             return A  # linear model -> constant Jacobian
 
         x0 = [J2zz_hat, J2zz_hat]
+        print(f"Initial guess x0 = {x0}")
         bounds = ([m2*(l2**2), 0], [np.inf, np.inf])
         result = least_squares(residuals, x0, jac=jac, bounds=bounds)
 
         # Save result
         self.arm2_params["J2yy_hat"] = result.x[0]
         self.arm2_params["J2xx"] = result.x[1]
+        print(result)
+        return result
+
+    def fit_linear_withJ1(self, debug = True, tau_source = "act", filter_bw = 100.0):
+        """
+        Uses numerical diff and filtering to get alpha.
+        Returns: OptimizeResult from least_squares (result.x = [J, b, f_s])
+        """
+
+        A_blocks, y_blocks = [], []
+
+        if not self.runs_parsed:
+            self.parse_runs()
+
+        # Get known params
+        J1zz_hat = self.arm1_params["J1zz_hat"]
+        m2 = self.arm2_params["m2"]
+        L1 = self.arm1_params["L_1"]
+        l2 = self.arm2_params["l2"]
+        b1 = self.arm1_params["b1"]
+        b2 = self.arm2_params["b2"]
+        J2zz_hat = self.arm2_params["J2zz_hat"]
+        g = 9.81  # [m/s^2]
+
+        fs2 = 0.0
+        if 'fs2' in self.arm2_params.keys():
+            fs2 = self.arm2_params['fs2']
+
+        for run_list in self.runs_dict.values():
+            for run in run_list:
+
+                """First, parse DATA """
+                time = np.array(run["time"])
+                if tau_source == "act":
+                    tau_raw = np.array(run["tau_act_compensated"])
+                elif tau_source == "set":
+                    tau_raw = np.array(run["tau_set_compensated"])
+                else:
+                    raise ValueError("This is not a valid tau_source")
+                t1 = np.array(run["pos"])
+                t1d_raw = np.array(run["vel"])
+                t2 = np.array(run["pend_pos"])
+                t2d_raw = self._gradient_padded(t2, 0.001)#np.gradient(t2, 0.001, edge_order=2)  # Don't use the Kalman filter
+
+                dt = np.mean(np.diff(time))
+                if not np.allclose(np.diff(time), dt, rtol=3.0):
+                    raise ValueError("Method 1 requires (approximately) uniform sampling per run; "
+                                    "resample/interpolate onto a uniform grid first.")
+                t1dd_raw = self._gradient_padded(t1d_raw, 0.001)#np.gradient(t1d_raw, 0.001, edge_order=2)
+                t2dd_raw = self._gradient_padded(t2d_raw, 0.001)#np.gradient(t2d_raw, 0.001, edge_order=2)
+            
+                # Filter
+                self.linear_filter_bw = filter_bw
+                t1d = self._implement_filtfilt(t1d_raw, cutoff_hz=filter_bw)
+                t2d = self._implement_filtfilt(t2d_raw, cutoff_hz=filter_bw)
+                t1dd = self._implement_filtfilt(t1dd_raw, cutoff_hz=filter_bw)
+                t2dd = self._implement_filtfilt(t2dd_raw, cutoff_hz=filter_bw)
+                tau_hat = self._implement_filtfilt(tau_raw, cutoff_hz=filter_bw)
+
+                run["vel_filt"] = t1d  # Save for eval
+                run["accel_filt"] = t1dd
+                run["pend_vel_filt"] = t2d
+                run["pend_accel_filt"] = t2dd
+                run["used_tau_filt"] = tau_hat
+
+                """ Build up A """
+                s2, c2, sin2 = np.sin(t2)**2, np.cos(t2)**2, np.sin(2*t2)
+                a11 = t1dd
+                a12 = t1dd*s2 + t1d*t2d*sin2
+                a13 = t1dd*c2 - t1d*t2d*sin2
+                a21 = 0*s2 # To enforce proper length
+                a22 = -0.5*(t1d**2)*sin2
+                a23 = -a21
+
+                A_blocks.append(np.vstack(( np.column_stack([a11, a12, a13]), np.column_stack([a21, a22, a23]) )))
+
+                """ Build up B """
+                P0p = m2*(L1**2)
+                C = m2*L1*l2
+                G = g*m2*l2
+
+                y1 = tau_hat - t1dd*P0p - t2dd*C*np.cos(t2) + C*np.sin(t2)*(t2d**2) - b1*t1d
+                y2 = -t1dd*C*np.cos(t2) - t2dd*J2zz_hat - b2*t2d - G*np.sin(t2) - fs2*np.tanh(100*t2d)
+                y_blocks.append(np.concatenate([y1, y2]))                            # RHS
+
+                if debug:
+                    fig, axs = plt.subplots(2, 1, figsize = (10,6), sharex = True)
+                    axs[0].plot(time, t1, label = "Theta")
+                    axs[0].plot(time, t1d, label = "Omega")
+                    axs[0].plot(time, t1dd, label = "Alpha")
+                    axs[0].grid(True, alpha=0.3)
+                    axs[0].legend()
+                    axs[1].plot(time, tau_hat, label = "Tau", color="black")
+                    axs[1].grid(True, alpha=0.3)
+                    axs[1].legend()
+                    
+                    plt.show()
+
+        A = np.vstack(A_blocks)
+        y = np.concatenate(y_blocks)
+
+        # Check conditioning
+        A_norm = A / np.linalg.norm(A, axis=0)
+        print(f"A condition number: {np.linalg.cond(A_norm)}")
+
+        def residuals(params):
+            J1zz_hat, J2yy_hat, J2xx = params
+            return A @ np.array([J1zz_hat, J2yy_hat, J2xx]) - y
+
+        def jac(params):
+            return A  # linear model -> constant Jacobian
+
+        x0 = [J1zz_hat, J2zz_hat, J2zz_hat]
+        print(f"Initial guess x0 = {x0}")
+        bounds = ([0, m2*(l2**2), 0], [np.inf, np.inf, np.inf])
+        result = least_squares(residuals, x0, jac=jac, bounds=bounds)
+
+        # Save result
+        self.arm1_params["J1zz_hat"] = result.x[0]  # Overwrite with new prediction
+        self.arm2_params["J2yy_hat"] = result.x[1]
+        self.arm2_params["J2xx"] = result.x[2]
         print(result)
         return result
 
@@ -842,120 +1088,140 @@ class FurataAnalyzer:
     # # ---------------------------------------------------------------------------
     
     # """ FITTING """
-    # def smooth_motor_lhs(self, state, tau, J, b, f_s, k = 100):
-    #     """ Deriv of state """
-    #     theta, omega = state
-    #     dtheta = omega
-    #     domega = (tau - b * omega - f_s * np.tanh(k*omega)) / J
-    #     return np.array([dtheta, domega])
+    def fit_nonlinear(self, tau_source = "act", fit_source = "vel", filter_bw = 100.0, inclJ1 = True):
+        """
+        Fit to rk4 simulations
+        """
 
-    # def smooth_rk4_motor_step(self, state, dt, tau, J, b, f_s):
-    #     k1 = self.smooth_motor_lhs(state, tau, J, b, f_s)
-    #     k2 = self.smooth_motor_lhs(state + 0.5 * dt * k1, tau, J, b, f_s)
-    #     k3 = self.smooth_motor_lhs(state + 0.5 * dt * k2, tau, J, b, f_s)
-    #     k4 = self.smooth_motor_lhs(state + dt * k3, tau, J, b, f_s)
-    #     return state + (dt / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)
+        # Parse
+        self.filter_runs()
 
-    # def smooth_simulate_motor(self, t, theta0, omega0, tau, J, b, f_s):
-    #     """RK4-integrate the diff equa at the exact (possibly non-uniform) sample times in t."""
-    #     state = np.array([theta0, omega0], dtype=float)
-    #     out = np.empty((len(t), 2))
-    #     out[0,:] = state
-    #     for i in range(len(t) - 1):
-    #         dt = t[i + 1] - t[i]
-    #         state = self.smooth_rk4_motor_step(state, dt, tau[i], J, b, f_s)
-    #         out[i+1, :] = state
-    #     return out
+        if inclJ1:
+            print("~~~Including J1~~~")
+            def residuals(params):
+                J1zz_hat, J2yy_hat, J2xx = params
+                res = []
+                for run_list in self.runs_dict.values():
+                    for run in run_list:
+                        # Parse
+                        t = np.array(run["time"])/1000.0
+                        tau = np.array(run["used_tau_filt"])
+        
+                        t1 = np.array(run["pos"])
+                        t2 = np.array(run["pend_pos"])
+                        t1d = np.array(run["vel_filt"])
+                        t2d = np.array(run["pend_vel_filt"])
+        
+                        state0 = np.array([t1[0], t1d[0], t2[0], t2d[0]])
+        
+                        # Forward simulation
+                        out_sim = self.simulate_furata(t, state0, tau, J2yy_hat, J2xx, J1zz_hat)
+                        t1_sim = out_sim[:, 0]
+                        t1d_sim = out_sim[:, 1]
+                        t2_sim = out_sim[:, 2]
+                        t2d_sim = out_sim[:, 3]
+        
+                        # Compare to actual
+                        residuals_t1 = (t1_sim - t1)
+                        residuals_t2 = (t2_sim - t2)
+                        residuals_t1d = (t1d_sim - t1d)
+                        residuals_t2d = (t2d_sim - t2d)
+        
+                        # Compare to actual
+                        if fit_source == "pos":
+                            cur_res = residuals_t1
+                        elif fit_source == "vel":
+                            cur_res = residuals_t1d
+                        elif fit_source == "pend_pos":
+                            cur_res = residuals_t2
+                        elif fit_source == "pend_vel":
+                            cur_res = residuals_t2d
+                        elif fit_source == "pend_all":
+                            cur_res = np.concatenate((residuals_t2, residuals_t2d))
+                        elif fit_source == "all":
+                            cur_res = np.concatenate((residuals_t1, residuals_t1d, residuals_t2, residuals_t2d))
+                        else:
+                            raise ValueError("Invalid fit source")
+                        res.append(cur_res)
+                return np.concatenate(res)
+        else:
+            def residuals(params):
+                J2yy_hat, J2xx = params
+                res = []
+                for run_list in self.runs_dict.values():
+                    for run in run_list:
+                        # Parse
+                        t = np.array(run["time"])/1000.0
+                        tau = np.array(run["used_tau_filt"])
+        
+                        t1 = np.array(run["pos"])
+                        t2 = np.array(run["pend_pos"])
+                        t1d = np.array(run["vel_filt"])
+                        t2d = np.array(run["pend_vel_filt"])
+        
+                        state0 = np.array([t1[0], t1d[0], t2[0], t2d[0]])
+        
+                        # Forward simulation
+                        out_sim = self.simulate_furata(t, state0, tau, J2yy_hat, J2xx, self.arm1_params['J1zz_hat'])
+                        t1_sim = out_sim[:, 0]
+                        t1d_sim = out_sim[:, 1]
+                        t2_sim = out_sim[:, 2]
+                        t2d_sim = out_sim[:, 3]
+        
+                        # Compare to actual
+                        residuals_t1 = (t1_sim - t1)
+                        residuals_t2 = (t2_sim - t2)
+                        residuals_t1d = (t1d_sim - t1d)
+                        residuals_t2d = (t2d_sim - t2d)
+        
+                        # Compare to actual
+                        if fit_source == "pos":
+                            cur_res = residuals_t1
+                        elif fit_source == "vel":
+                            cur_res = residuals_t1d
+                        elif fit_source == "pend_pos":
+                            cur_res = residuals_t2
+                        elif fit_source == "pend_vel":
+                            cur_res = residuals_t2d
+                        elif fit_source == "pend_all":
+                            cur_res = np.concatenate((residuals_t2, residuals_t2d))
+                        elif fit_source == "all":
+                            cur_res = np.concatenate((residuals_t1, residuals_t1d, residuals_t2, residuals_t2d))
+                        else:
+                            raise ValueError("Invalid fit source")
+                        res.append(cur_res)
+                return np.concatenate(res)
 
-    # def fit_nonlinear(self, J0, b0, fs0, tau_source = "act", fit_source = "vel", filter_bw = 0.0, inclCoulomb = True):
-    #     """
-    #     J0: initial inertia guess
-    #     b0: initial damping guess
-    #     fs0: initial coulombic friction guess
-    #     """
-    #     if not self.runs_parsed:
-    #         self.parse_runs()
+        print("Starting least_squares")
+        if inclJ1:
+            result = least_squares(
+                residuals, x0=[self.arm1_params['J1zz_hat'], self.arm2_params['J2zz_hat'], self.arm2_params['J2zz_hat']],
+                bounds=([0, self.arm2_params['m2']*(self.arm2_params['l2']**2), 0], [np.inf, np.inf, np.inf]),
+                method="trf",
+                loss="soft_l1",   # mild robustness to outlier samples/glitches; use 'linear' for plain LS
+                x_scale=[max(self.arm1_params['J1zz_hat'], 1e-9), max(self.arm2_params['J2zz_hat'], 1e-9), max(self.arm2_params['J2zz_hat'], 1e-9)],  # helps scipy when params have very different magnitudes
+                verbose=2,
+            )
+        else:
+            result = least_squares(
+                residuals, x0=[self.arm2_params['J2zz_hat'], self.arm2_params['J2zz_hat']],
+                bounds=([self.arm2_params['m2']*(self.arm2_params['l2']**2), 0], [np.inf, np.inf]),
+                method="trf",
+                loss="soft_l1",   # mild robustness to outlier samples/glitches; use 'linear' for plain LS
+                x_scale=[max(self.arm2_params['J2zz_hat'], 1e-9), max(self.arm2_params['J2zz_hat'], 1e-9)],  # helps scipy when params have very different magnitudes
+                verbose=2,
+            )
 
-    #     # First, do proper filtering
-    #     for run_list in self.runs_dict.values():
-    #         for run in run_list:
-    #             t = np.array(run["time"])
-    #             if tau_source == "act":
-    #                 tau_raw = np.array(run["tau_act_compensated"])
-    #             elif tau_source == "set":
-    #                 tau_raw = np.array(run["tau_set_compensated"])
-    #             else:
-    #                 raise ValueError("This is not a valid tau_source")
-    #             theta = np.array(run["pos"])
-    #             theta_d_raw = np.array(run["vel"])
-    #             sgn_theta_d_raw = np.sign(theta_d_raw)
-
-    #             dt = np.mean(np.diff(t))
-    #             if not np.allclose(np.diff(t), dt, rtol=1.0):
-    #                 raise ValueError("Method 1 requires (approximately) uniform sampling per run; "
-    #                                 "resample/interpolate onto a uniform grid first.")
-    #             theta_dd_raw = np.gradient(theta_d_raw, 0.001)
-            
-    #             # Filter
-    #             self.linear_filter_bw = filter_bw
-    #             if filter_bw != 0.0:
-    #                 theta_d = self._implement_filtfilt(theta_d_raw, cutoff_hz=filter_bw)
-    #                 sgn_theta_d = self._implement_filtfilt(sgn_theta_d_raw, cutoff_hz=filter_bw)
-    #                 theta_dd = self._implement_filtfilt(theta_dd_raw, cutoff_hz=filter_bw)
-    #                 tau = self._implement_filtfilt(tau_raw, cutoff_hz=filter_bw)
-    #             else:
-    #                 theta_d = theta_d
-    #                 sgn_theta_d = sgn_theta_d_raw
-    #                 theta_dd = theta_dd_raw
-    #                 tau = tau_raw
-    #             run["vel_filt"] = theta_d  # Save for eval
-    #             run["sgn_vel_filt"] = sgn_theta_d
-    #             run["accel_filt"] = theta_dd
-    #             run["used_tau_filt"] = tau
-
-    #     def residuals(params):
-    #         J, b, f_s = params
-    #         res = []
-    #         for run_list in self.runs_dict.values():
-    #             for run in run_list:
-    #                 # Parse
-    #                 t = np.array(run["time"])/1000.0
-    #                 tau = np.array(run["used_tau_filt"])
-    #                 theta = np.array(run["pos"])
-    #                 omega = np.array(run["vel_filt"])
-    
-    #                 # Forward simulation
-    #                 out_sim = self.smooth_simulate_motor(t, theta[0], omega[0], tau, J, b, f_s)
-    #                 theta_sim = out_sim[:, 0]
-    #                 omega_sim = out_sim[:, 1]
-    
-    #                 # Compare to actual
-    #                 if fit_source == "pos":
-    #                     cur_res = (theta_sim - theta)
-    #                 elif fit_source == "vel":
-    #                     cur_res = (omega_sim - omega)
-    #                 else:
-    #                     raise ValueError("Invalid fit source")
-    #                 res.append(cur_res)
-    #         return np.concatenate(res)
-
-    #     print("Starting least_squares")
-    #     result = least_squares(
-    #         residuals, x0=[J0, b0, fs0],
-    #         bounds=([1e-12, 0, 0], [np.inf, np.inf, np.inf]),
-    #         method="trf",
-    #         loss="soft_l1",   # mild robustness to outlier samples/glitches; use 'linear' for plain LS
-    #         x_scale=[max(J0, 1e-9), max(b0, 1e-9), max(fs0, 1e-9)],  # helps scipy when J and b have very different magnitudes
-    #         verbose=2,
-    #     )
-
-    #     # Save result
-    #     self.motor_params = {
-    #         "J": result.x[0],
-    #         "b": result.x[1],
-    #         "f_s": result.x[2] if inclCoulomb else 0.0
-    #     }
-    #     return result
+        # Save result
+        if inclJ1:
+            self.arm1_params["J1zz_hat"] = result.x[0]  # Overwrite with new prediction
+            self.arm2_params["J2yy_hat"] = result.x[1]
+            self.arm2_params["J2xx"] = result.x[2]
+        else:
+            self.arm2_params["J2yy_hat"] = result.x[0]
+            self.arm2_params["J2xx"] = result.x[1]
+        print(result)
+        return result
 
 # ---------------------------------------------------------------------------
 # Fit dat data
@@ -965,21 +1231,41 @@ if __name__ == "__main__":
     base_path = "/Users/trevorperey/Desktop/PersonalProjects/ros2_odrive_personal/src/ps5_odrive_control/ps5_odrive_control/logs/"
     cog_path = "/Users/trevorperey/Desktop/PersonalProjects/ros2_odrive_personal/config/m8325s_furata/cogging_map.json"
     config_path = "/Users/trevorperey/Desktop/PersonalProjects/ros2_odrive_personal/config/m8325s_furata"
+    header_path = "/Users/trevorperey/Desktop/PersonalProjects/ros2_odrive_personal/Teensy_ODrive_PIO/lib/config/m8325s_furata/"
     one_example = base_path + "sinetau_nocog_motoronly_001/logs_20260823_211700.pkl"
 
     analyzer = FurataAnalyzer(cog_path, tau_filter_bw=25)
     analyzer.load_params_from_configs(config_path=config_path, withFs=True)
-    analyzer.add_all_logs(base_path, identifier="generated")
+    analyzer.add_all_logs(base_path, identifier="all")
     analyzer.parse_runs(doPlot=False, trim = 10)
     #analyzer.plot_raw_all()
 
-    # ### LINEAR FIT ###
-    print("-----Linear-----")
-    result = analyzer.fit_linear(debug=False, filter_bw = 25)
-    # analyzer.arm2_params["J2yy_hat"] = 0.0
-    # analyzer.arm2_params["J2xx"] = 0.0
-    # # analyzer.arm2_params["J2zz_hat"] = 0.0
-    # analyzer.arm2_params["b2"] = 0.0
-    # analyzer.arm2_params["L2"] = 0.0
-    # analyzer.arm2_params["l2"] = 0.0
-    analyzer.simulate_runs()
+    ### LINEAR FIT ###
+    print("-----Linear (with J1)-----")
+    result = analyzer.fit_linear_withJ1(debug=False, filter_bw = 25)
+    analyzer.store_params_to_configs(header_path=header_path)
+    #analyzer.simulate_runs()
+
+    # TEST
+    print("~~~Moving to tester")
+    tester = FurataAnalyzer(cog_path, tau_filter_bw=25)
+    tester.load_params_from_configs(config_path=config_path, withFs=True)
+    tester.add_all_logs(base_path, identifier="generated")
+    tester.parse_runs(doPlot=False, trim = 10)
+    tester.filter_runs()
+    tester.simulate_runs()
+
+    # # ### NONLINEAR FIT ###
+    # print("-----Nonlinear (with J1)-----")
+    # result = analyzer.fit_nonlinear(fit_source="pend_vel", filter_bw = 25)
+    # analyzer.store_params_to_configs(header_path=header_path)
+    # #analyzer.simulate_runs()
+
+    # # TEST
+    # print("~~~Moving to tester")
+    # tester = FurataAnalyzer(cog_path, tau_filter_bw=25)
+    # tester.load_params_from_configs(config_path=config_path, withFs=True)
+    # tester.add_all_logs(base_path, identifier="generated")
+    # tester.parse_runs(doPlot=False, trim = 10)
+    # tester.filter_runs()
+    # tester.simulate_runs()

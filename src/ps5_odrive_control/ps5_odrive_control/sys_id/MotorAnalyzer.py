@@ -800,19 +800,22 @@ class MotorAnalyzer:
             self.config_folder.mkdir(parents=True, exist_ok=True)
             self.motor_json = self.config_folder / "arm1.json"
             self.motor_json.write_text(json.dumps(motor_params_to_save, indent=2))
+            self.motor_json = self.config_folder / "arm1_fs.json"
+            self.motor_json.write_text(json.dumps(motor_params_to_save, indent=2))
     
             # HEADERS (for CPP scripts)
             self.header_path = Path(header_path)
             self.header_path.mkdir(parents=True, exist_ok=True)
-            header_file = self.header_path / "arm1.hpp"
-            with open(header_file, "w") as f:
-                f.write("#pragma once\n\n")
-                f.write("namespace Arm1Config {\n\n")
-                f.write(f"constexpr float J1zz_hat = {self.motor_params["J"]:.4f};\n\n")
-                f.write(f"constexpr float b1 = {self.motor_params["b"]:.4f}; \n\n")
-                f.write(f"constexpr float fs1 = {self.motor_params["f_s"]:.4f};\n\n")
-                f.write(f"constexpr float L_1 = {self.motor_params["L_1"]:.4f};\n\n")
-                f.write("} // namespace Arm1Config\n")
+            header_files = [self.header_path / "arm1.hpp", self.header_path / "arm1_fs.hpp"]
+            for header_file in header_files:
+                with open(header_file, "w") as f:
+                    f.write("#pragma once\n\n")
+                    f.write("namespace Arm1Config {\n\n")
+                    f.write(f"constexpr float J1zz_hat = {self.motor_params["J"]:.4f};\n\n")
+                    f.write(f"constexpr float b1 = {self.motor_params["b"]:.4f}; \n\n")
+                    f.write(f"constexpr float fs1 = {self.motor_params["f_s"]:.4f};\n\n")
+                    f.write(f"constexpr float L_1 = {self.motor_params["L_1"]:.4f};\n\n")
+                    f.write("} // namespace Arm1Config\n")
     
             print(f"Wrote {self.header_path}")
 
