@@ -59,6 +59,10 @@ from pathlib import Path
 
 class FurataAnalyzer:
 
+    RESID_FEATURE_NAMES = ["1", "tau", "t1d", "t2d", "t1d*|t1d|", "t2d*|t2d|", "tanh(50*t1d)", "tanh(50*t2d)",
+                           "sin(t2)", "cos(t2)", "t1d^2*sin(2*t2)", "t1d*t2d*sin(2*t2)",
+                           "strib_pos_t1d", "strib_neg_t1d", "strib_pos_t2d", "strib_neg_t2d"]
+
     def __init__(self, cog_file, tau_filter_bw = 100.0):
         # Infrastructure to combine several runs
         self.log_dict = {} # to be dict of dicts
@@ -80,6 +84,11 @@ class FurataAnalyzer:
         self.arm2_json = None
         self.config_folder = None
         self._withFs = None
+
+        # Learned residual correction
+        self.resid_coef = None
+        self.resid_feat_scale = None
+        self.resid_dec = 1   # integration step (ms) the residual model was fit with
 
     def add_all_logs(self, top_path, identifier = "motoronly"):
         """
@@ -450,50 +459,6 @@ class FurataAnalyzer:
         normal_cutoff = cutoff_hz / nyquist
         b, a = butter(order, normal_cutoff, btype='low')
         return filtfilt(b, a, signal)
-
-    # def reapply_tau_filter(self):
-    #     # Correct the log_dict
-    #     for log in self.log_dict.values():
-    #         filter_list = [
-    #             "tau_act",
-    #             "tau_set",
-    #             "tau_act_compensated",
-    #             "tau_set_compensated"
-    #         ]
-
-    #         for filter in filter_list:
-    #             log[f"{filter}_filt"] = self._implement_filtfilt(
-    #                 log[filter],
-    #                 cutoff_hz=self.tau_filter_bw
-    #             )
-
-    #     # Correct the RUN dict
-    #     if self.runs_parsed:
-    #         for name, run_list in self.runs_dict.items():
-    #             log = self.log_dict[name]
-
-    #             for run_idx, run in enumerate(run_list):
-    #                 start = self.start_dict[name][run_idx]
-    #                 end = self.end_dict[name][run_idx]
-
-    #                 for filter in [
-    #                     "tau_act",
-    #                     "tau_set",
-    #                     "tau_act_compensated",
-    #                     "tau_set_compensated"
-    #                 ]:
-    #                     run[f"{filter}_filt"] = log[f"{filter}_filt"][start:end]
-
-    # def _evaluate_true_accel(self, w, sgn_w, tau, J, b, f_s, eps=0.1):
-    #     # Moving: Coulomb friction opposes velocity
-    #     acc_moving = (tau - b * w - f_s * sgn_w) / J
-
-    #     # Near zero speed: friction opposes net torque, capped at +/- f_s
-    #     tau_net  = tau - b * w
-    #     tau_fric = np.clip(tau_net, -f_s, f_s)
-    #     acc_slow = (tau_net - tau_fric) / J      # exactly 0 when |tau_net| <= f_s
-
-    #     return np.where(np.abs(w) >= eps, acc_moving, acc_slow)
 
     # def cut_run(self, name_to_cut, i_to_cut):
     #     for (name, run_list) in self.runs_dict.items():
@@ -881,7 +846,7 @@ class FurataAnalyzer:
                 a13 = t1dd*c2 - t1d*t2d*sin2
                 a21 = 0*s2 # To enforce proper length
                 a22 = -0.5*(t1d**2)*sin2
-                a23 = -a21
+                a23 = -a22
 
                 A_blocks.append(np.vstack(( np.column_stack([a11, a12, a13]), np.column_stack([a21, a22, a23]) )))
 
@@ -933,155 +898,133 @@ class FurataAnalyzer:
         print(result)
         return result
 
-    # def optimize_linear_fit(self, debug = True, inclCoulomb = True, min_bw = 1.0, max_bw = 101.0, step_size = 5.0, tau_source = "act"):
-    #     """ Run linear_fit repeatedly with tons of possible filter params and show me the best one """
-    #     debug_count = 0
-    #     cur_min_cost = np.inf
-    #     final_bw = self.tau_filter_bw
-    #     print("Starting optimum linear fit...")
-    #     for bw in np.arange(min_bw, max_bw, step_size):
-    #         cur_result = self.fit_linear(debug=False, inclCoulomb=inclCoulomb, tau_source=tau_source, filter_bw=bw)
+    def fit_linear_combo(self, debug=True, tau_source="act", filter_bw=100.0):
+        """
+        Fit the two inertia combinations the data can actually distinguish:
+            A = J1zz_hat + J2xx      (motor-side inertia with pendulum hanging)
+            D = J2yy_hat - J2xx      (how that inertia changes with pendulum angle)
+        J1zz_hat, J2yy_hat and J2xx individually are NOT identifiable from these runs.
+        The current J2xx in the config is kept as-is and J1zz_hat / J2yy_hat are set
+        so that A and D match the fit. Any J2xx gives identical dynamics.
+        Returns: OptimizeResult from least_squares (result.x = [A, D])
+        """
+        A_blocks, y_blocks = [], []
 
-    #         if cur_result.cost < cur_min_cost:
-    #             cur_min_cost = cur_result.cost
-    #             final_bw = bw
+        if not self.runs_parsed:
+            self.parse_runs()
 
-    #         if debug:
-    #             debug_count += 1
-    #             if debug_count % 10 == 0:
-    #                 print(f"On iteration {debug_count}")
+        # Known params
+        m2 = self.arm2_params["m2"]
+        L1 = self.arm1_params["L_1"]
+        l2 = self.arm2_params["l2"]
+        b1 = self.arm1_params["b1"]
+        b2 = self.arm2_params["b2"]
+        J2zz_hat = self.arm2_params["J2zz_hat"]
+        J2xx = self.arm2_params["J2xx"]
+        g = 9.81  # [m/s^2]
+        fs2 = self.arm2_params.get("fs2", 0.0)
 
-    #     # Rerun with the final best
-    #     final_result = self.fit_linear(debug=False, inclCoulomb=inclCoulomb, tau_source=tau_source, filter_bw=final_bw)
+        for run_list in self.runs_dict.values():
+            for run in run_list:
 
-    #     # Show final result
-    #     print("---OPTIMUM BASIC LINEAR FIT RESULT---")
-    #     print(final_result)
-    #     print(f"Best filter bw = {final_bw}")
-    #     self.test_linear_fit()
+                """ First, parse DATA """
+                time = np.array(run["time"])
+                if tau_source == "act":
+                    tau_raw = np.array(run["tau_act_compensated"])
+                elif tau_source == "set":
+                    tau_raw = np.array(run["tau_set_compensated"])
+                else:
+                    raise ValueError("This is not a valid tau_source")
+                t1 = np.array(run["pos"])
+                t1d_raw = np.array(run["vel"])
+                t2 = np.array(run["pend_pos"])
+                t2d_raw = self._gradient_padded(t2, 0.001)
 
-    # def test_linear_fit(self, useTrue = True):
-    #     """
-    #     For each run, compare the measured (filtered) acceleration against
-    #     the model's predicted acceleration, using the fitted J, b, f_s.
+                dt = np.mean(np.diff(time))
+                if not np.allclose(np.diff(time), dt, rtol=3.0):
+                    raise ValueError("Method 1 requires (approximately) uniform sampling per run; "
+                                     "resample/interpolate onto a uniform grid first.")
+                t1dd_raw = self._gradient_padded(t1d_raw, 0.001)
+                t2dd_raw = self._gradient_padded(t2d_raw, 0.001)
 
-    #         theta_dd_pred = (tau_compensated_filt - b*theta_d - f_s*sign(theta_d)) / J
+                # Filter
+                self.linear_filter_bw = filter_bw
+                t1d = self._implement_filtfilt(t1d_raw, cutoff_hz=filter_bw)
+                t2d = self._implement_filtfilt(t2d_raw, cutoff_hz=filter_bw)
+                t1dd = self._implement_filtfilt(t1dd_raw, cutoff_hz=filter_bw)
+                t2dd = self._implement_filtfilt(t2dd_raw, cutoff_hz=filter_bw)
+                tau_hat = self._implement_filtfilt(tau_raw, cutoff_hz=filter_bw)
 
-    #     Requires fit_linear() to have been run first (self.motor_params must exist).
-    #     """
-    #     if not hasattr(self, "motor_params") or self.motor_params is None:
-    #         raise RuntimeError("Run fit_linear() first to populate self.motor_params.")
+                run["vel_filt"] = t1d  # Save for eval
+                run["accel_filt"] = t1dd
+                run["pend_vel_filt"] = t2d
+                run["pend_accel_filt"] = t2dd
+                run["used_tau_filt"] = tau_hat
 
-    #     J = self.motor_params["J"]
-    #     b = self.motor_params["b"]
-    #     f_s = self.motor_params["f_s"]
+                """ Build up A (columns: [A, D]) """
+                s2, sin2 = np.sin(t2)**2, np.sin(2*t2)
+                a11 = t1dd                              # A: motor row
+                a12 = t1dd*s2 + t1d*t2d*sin2            # D: motor row
+                a21 = np.zeros_like(t1dd)               # A: not in pendulum row
+                a22 = -0.5*(t1d**2)*sin2                # D: pendulum row
 
-    #     for run_list in self.runs_dict.values():
-    #         for run in run_list:
-    #             if "accel_filt" not in run:
-    #                 # This run wasn't processed by fit_linear (e.g. added after fitting)
-    #                 raise RuntimeError("Run fit_linear() first to populate acceleration.")
+                A_blocks.append(np.vstack((np.column_stack([a11, a12]),
+                                           np.column_stack([a21, a22]))))
 
-    #             t = np.array(run["time"])
-    #             tau = np.array(run["used_tau_filt"])
-    #             theta_d = run["vel_filt"]
-    #             sgn_theta_d = run["sgn_vel_filt"]
-    #             theta_dd_measured = run["accel_filt"]  # saved during fit_linear
-    #             if useTrue:
-    #                 theta_dd_predicted = self._evaluate_true_accel(theta_d, sgn_theta_d, tau, J, b, f_s)
-    #             else:
-    #                 theta_dd_predicted = (tau - b * theta_d - f_s * sgn_theta_d) / J
-    #             residual = theta_dd_measured - theta_dd_predicted
+                """ Build up y (everything that doesn't depend on A or D) """
+                P0p = m2*(L1**2)
+                C = m2*L1*l2
+                G = g*m2*l2
 
-    #             fig, axs = plt.subplots(3, 1, figsize=(10, 6), sharex=True)
-    #             axs[0].plot(t, theta_dd_measured, label="Measured accel (filtered)", color="black")
-    #             axs[0].plot(t, theta_dd_predicted, label="Model-predicted accel", color="red", linestyle="--")
-    #             axs[0].set_ylabel("Accel (rad/s^2)")
-    #             axs[0].set_title("Measured vs Predicted Acceleration")
-    #             axs[0].grid(True, alpha=0.3)
-    #             axs[0].legend()
+                y1 = tau_hat - t1dd*P0p - t2dd*C*np.cos(t2) + C*np.sin(t2)*(t2d**2) - b1*t1d
+                y2 = -t1dd*C*np.cos(t2) - t2dd*J2zz_hat - b2*t2d - G*np.sin(t2) - fs2*np.tanh(100*t2d)
+                y_blocks.append(np.concatenate([y1, y2]))
 
-    #             axs[1].plot(t, tau, label="Tau", color="blue")
-    #             axs[1].set_ylabel("Torque (N-m)")
-    #             axs[1].set_xlabel("Time (ms)")
-    #             axs[1].grid(True, alpha=0.3)
-    #             axs[1].legend()
+                if debug:
+                    fig, axs = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
+                    axs[0].plot(time, t1, label="Theta")
+                    axs[0].plot(time, t1d, label="Omega")
+                    axs[0].plot(time, t1dd, label="Alpha")
+                    axs[0].grid(True, alpha=0.3)
+                    axs[0].legend()
+                    axs[1].plot(time, tau_hat, label="Tau", color="black")
+                    axs[1].grid(True, alpha=0.3)
+                    axs[1].legend()
+                    plt.show()
 
-    #             axs[2].plot(t, residual, label="Residual (measured - predicted)", color="purple")
-    #             axs[2].set_ylabel("Residual (rad/s^2)")
-    #             axs[2].set_xlabel("Time (ms)")
-    #             axs[2].grid(True, alpha=0.3)
-    #             axs[2].legend()
+        A = np.vstack(A_blocks)
+        y = np.concatenate(y_blocks)
 
-    #             fig.tight_layout()
-    #             plt.show()
+        # Check conditioning
+        A_norm = A / np.linalg.norm(A, axis=0)
+        print(f"A condition number: {np.linalg.cond(A_norm)}")
 
-    # def best_test_linear_fit(self, eps_range = [0.01, 0.3, 0.01]):
-    #     """
-    #     For each run, compare the measured (filtered) acceleration against
-    #     the model's predicted acceleration, using the fitted J, b, f_s.
+        def residuals(params):
+            return A @ params - y
 
-    #         theta_dd_pred = (tau_compensated_filt - b*theta_d - f_s*sign(theta_d)) / J
+        def jac(params):
+            return A  # linear model -> constant Jacobian
 
-    #     Requires fit_linear() to have been run first (self.motor_params must exist).
-    #     """
-    #     if not hasattr(self, "motor_params") or self.motor_params is None:
-    #         raise RuntimeError("Run fit_linear() first to populate self.motor_params.")
+        x0 = [1e-3 + J2xx,
+              1e-5 - J2xx]
+        print(f"Initial guess [A, D] = {x0}")
+        bounds = ([0, -np.inf], [np.inf, np.inf])   # A > 0; D left free
+        result = least_squares(residuals, x0, jac=jac, bounds=bounds)
+        A_fit, D_fit = result.x
 
-    #     J = self.motor_params["J"]
-    #     b = self.motor_params["b"]
-    #     f_s = self.motor_params["f_s"]
+        # Save the combos, and set individual params consistently (J2xx unchanged)
+        self.arm1_params["A_J1_plus_J2xx"] = A_fit
+        self.arm2_params["D_J2yy_minus_J2xx"] = D_fit
+        self.arm1_params["J1zz_hat"] = A_fit - J2xx
+        self.arm2_params["J2yy_hat"] = D_fit + J2xx
+        self.arm2_params["J2xx"] = J2xx
 
-    #     for run_list in self.runs_dict.values():
-    #         for run in run_list:
-    #             if "accel_filt" not in run:
-    #                 # This run wasn't processed by fit_linear (e.g. added after fitting)
-    #                 raise RuntimeError("Run fit_linear() first to populate acceleration.")
-
-    #             t = np.array(run["time"])
-    #             tau = np.array(run["used_tau_filt"])
-    #             theta_d = run["vel_filt"]
-    #             sgn_theta_d = run["sgn_vel_filt"]
-    #             theta_dd_measured = run["accel_filt"]  # saved during fit_linear
-
-    #             # Find best eps
-    #             best_eps = 0.0
-    #             min_cost = np.inf
-    #             for eps in np.arange(eps_range[0], eps_range[1], eps_range[2]):
-    #                 theta_dd_predicted = self._evaluate_true_accel(theta_d, sgn_theta_d, tau, J, b, f_s, eps = eps)
-    #                 residual = theta_dd_measured - theta_dd_predicted
-
-    #                 cur_cost = np.sum(residual**2)
-    #                 if cur_cost < min_cost:
-    #                     best_eps = eps
-                
-    #             # Final re-eval
-    #             print(f"Best eps = {best_eps}")
-    #             theta_dd_predicted = self._evaluate_true_accel(theta_d, sgn_theta_d, tau, J, b, f_s, eps = eps)
-    #             residual = theta_dd_measured - theta_dd_predicted
-
-    #             fig, axs = plt.subplots(3, 1, figsize=(10, 6), sharex=True)
-    #             axs[0].plot(t, theta_dd_measured, label="Measured accel (filtered)", color="black")
-    #             axs[0].plot(t, theta_dd_predicted, label="Model-predicted accel", color="red", linestyle="--")
-    #             axs[0].set_ylabel("Accel (rad/s^2)")
-    #             axs[0].set_title("Measured vs Predicted Acceleration")
-    #             axs[0].grid(True, alpha=0.3)
-    #             axs[0].legend()
-
-    #             axs[1].plot(t, tau, label="Tau", color="blue")
-    #             axs[1].set_ylabel("Torque (N-m)")
-    #             axs[1].set_xlabel("Time (ms)")
-    #             axs[1].grid(True, alpha=0.3)
-    #             axs[1].legend()
-
-    #             axs[2].plot(t, residual, label="Residual (measured - predicted)", color="purple")
-    #             axs[2].set_ylabel("Residual (rad/s^2)")
-    #             axs[2].set_xlabel("Time (ms)")
-    #             axs[2].grid(True, alpha=0.3)
-    #             axs[2].legend()
-
-    #             fig.tight_layout()
-    #             plt.show()
+        print("AFTER FIT")
+        print(f"A = J1zz_hat + J2xx = {A_fit:.6g}")
+        print(f"D = J2yy_hat - J2xx = {D_fit:.6g}")
+        print(f"(Using J2xx = {J2xx:.6g} -> J1zz_hat = {A_fit - J2xx:.6g}, J2yy_hat = {D_fit + J2xx:.6g})")
+        print(result)
+        return result
 
     # # ---------------------------------------------------------------------------
     # # Method 2: forward-simulation (RK4) with coulombic friction + nonlinear least squares
@@ -1223,6 +1166,479 @@ class FurataAnalyzer:
         print(result)
         return result
 
+
+    # # ---------------------------------------------------------------------------
+    # # Analyzer residuals
+    # # ---------------------------------------------------------------------------
+
+    def _horizon_error_curve(self, run, min_horizon_guarantee=1000, stride=1000):
+        t = np.array(run["time"]) / 1000.0
+        tau = np.array(run["used_tau_filt"])
+        t1, t2 = run["pos"], run["pend_pos"]
+        t1d, t2d = run["vel_filt"], run["pend_vel_filt"]
+
+        # One-step accel residual: model accel at MEASURED state vs measured accel
+        t1dd = []
+        t2dd = []
+        for i in range(len(t)):
+            cur_state = np.array([t1[i], t1d[i], t2[i], t2d[i]])
+            cur_deriv = self.take_state_deriv(cur_state, tau[i],
+                                            self.arm2_params['J2yy_hat'],
+                                            self.arm2_params['J2xx'],
+                                            self.arm1_params['J1zz_hat'])
+            t1dd.append(cur_deriv[1])
+            t2dd.append(cur_deriv[3])
+        errors_t1dd = np.array(t1dd) - np.array(run["accel_filt"])
+        errors_t2dd = np.array(t2dd) - np.array(run["pend_accel_filt"])
+
+        # Horizon errors (unchanged)
+        errors_t1 = {h: [] for h in range(1, len(t))}
+        errors_t2 = {h: [] for h in range(1, len(t))}
+
+        for start in range(0, max(len(t) - min_horizon_guarantee, 1), stride):
+            print(start)
+            state0 = np.array([t1[start], t1d[start], t2[start], t2d[start]])
+            out = self.simulate_furata(t[start:], state0, tau[start:],
+                                    self.arm2_params['J2yy_hat'],
+                                    self.arm2_params['J2xx'],
+                                    self.arm1_params['J1zz_hat'])
+            max_h_this_start = len(out)
+            for h in range(1, max_h_this_start):
+                errors_t1[h].append(out[h, 0] - t1[start + h])
+                errors_t2[h].append(out[h, 2] - t2[start + h])
+
+        return errors_t1, errors_t2, errors_t1dd, errors_t2dd
+
+    def plot_run_error_horizons(self, debug=False, save_dir=None):
+        """
+        Computes horizon error curves (position) and one-step residuals (accel)
+        for every run, optionally plotting each run individually (debug=True),
+        and always producing aggregate plots pooled across ALL runs.
+          Fig 1: MOTOR     - position RMSE vs horizon, accel residual vs time since run start
+          Fig 2: PENDULUM  - position RMSE vs horizon, accel residual vs time since run start
+        """
+        if not self.runs_parsed:
+            self.parse_runs()
+        self.filter_runs()
+
+        # Accumulators, pooled across every run
+        pooled_t1 = {}     # horizon -> list of position errors
+        pooled_t2 = {}
+        pooled_t1dd = {}   # sample index from run start -> list of accel residuals
+        pooled_t2dd = {}
+
+        for (name, run_list) in self.runs_dict.items():
+            for (i, run) in enumerate(run_list):
+
+                print(f"Generating horizon error curve for {name}_{i}...")
+                errors_t1, errors_t2, errors_t1dd, errors_t2dd = self._horizon_error_curve(run)
+
+                # Pool position errors by horizon
+                for h, e in errors_t1.items():
+                    if len(e) > 0:
+                        pooled_t1.setdefault(h, []).extend(e)
+                for h, e in errors_t2.items():
+                    if len(e) > 0:
+                        pooled_t2.setdefault(h, []).extend(e)
+
+                # Pool accel residuals by sample index from run start
+                for k, e in enumerate(errors_t1dd):
+                    pooled_t1dd.setdefault(k, []).append(e)
+                for k, e in enumerate(errors_t2dd):
+                    pooled_t2dd.setdefault(k, []).append(e)
+
+                if debug:
+                    hed_t1 = {h: np.sqrt(np.mean(np.array(e)**2)) for h, e in errors_t1.items() if len(e) > 0}
+                    hed_t2 = {h: np.sqrt(np.mean(np.array(e)**2)) for h, e in errors_t2.items() if len(e) > 0}
+                    h1 = sorted(hed_t1.keys())
+                    h2 = sorted(hed_t2.keys())
+                    t_run = (np.array(run["time"]) - run["time"][0]) / 1000.0
+
+                    fig, axs = plt.subplots(2, 2, figsize=(14, 7.5), sharex = True)
+                    axs[0, 0].plot(np.array(h1) / 1000.0, [hed_t1[h] for h in h1], color="red")
+                    axs[0, 0].set_title(f"{name}_{i} MOTOR position RMSE vs horizon")
+                    axs[0, 0].set_xlabel("Horizon (s)")
+                    axs[0, 0].set_ylabel("RMSE (rad)")
+
+                    axs[0, 1].plot(t_run, errors_t1dd, color="red")
+                    axs[0, 1].axhline(np.sqrt(np.mean(np.array(errors_t1dd)**2) ), color = "black", label = "RMSE")
+                    axs[0, 1].set_title(f"{name}_{i} MOTOR accel residual")
+                    axs[0, 1].set_xlabel("Time since run start (s)")
+                    axs[0, 1].set_ylabel("Model - measured (rad/s^2)")
+
+                    axs[1, 0].plot(np.array(h2) / 1000.0, [hed_t2[h] for h in h2], color="blue")
+                    axs[1, 0].set_title(f"{name}_{i} PENDULUM position RMSE vs horizon")
+                    axs[1, 0].set_xlabel("Horizon (s)")
+                    axs[1, 0].set_ylabel("RMSE (rad)")
+
+                    axs[1, 1].plot(t_run, errors_t2dd, color="blue")
+                    axs[1, 1].axhline(np.sqrt(np.mean(np.array(errors_t2dd)**2) ), color = "purple", label = "RMSE")
+                    axs[1, 1].set_title(f"{name}_{i} PENDULUM accel residual")
+                    axs[1, 1].set_xlabel("Time since run start (s)")
+                    axs[1, 1].set_ylabel("Model - measured (rad/s^2)")
+
+                    for ax in axs.flat:
+                        ax.grid(True, alpha=0.3)
+                    fig.tight_layout()
+                    plt.show()
+
+        # --- Aggregates: position ---
+        sorted_h1 = sorted(pooled_t1.keys())
+        sorted_h2 = sorted(pooled_t2.keys())
+
+        agg_horizons_t1 = np.array(sorted_h1) / 1000.0
+        agg_rmse_t1 = np.array([np.sqrt(np.mean(np.array(pooled_t1[h])**2)) for h in sorted_h1])
+
+        agg_horizons_t2 = np.array(sorted_h2) / 1000.0
+        agg_rmse_t2 = np.array([np.sqrt(np.mean(np.array(pooled_t2[h])**2)) for h in sorted_h2])
+
+        # --- Aggregates: accel (scatter of every run's point at each time, plus RMSE across runs) ---
+        def _accel_agg(pooled):
+            ks = sorted(pooled.keys())
+            scatter_t = np.concatenate([np.full(len(pooled[k]), k / 1000.0) for k in ks])
+            scatter_e = np.concatenate([np.array(pooled[k]) for k in ks])
+            t_line = np.array(ks) / 1000.0
+            rmse_line = np.array([np.sqrt(np.mean(np.array(pooled[k])**2)) for k in ks])
+            return scatter_t, scatter_e, t_line, rmse_line
+
+        sc_t1, sc_e1, t_line1, rmse_line1 = _accel_agg(pooled_t1dd)
+        sc_t2, sc_e2, t_line2, rmse_line2 = _accel_agg(pooled_t2dd)
+        print(f"Overall accel RMSE: motor {np.sqrt(np.mean(sc_e1**2)):.3f}, "
+              f"pendulum {np.sqrt(np.mean(sc_e2**2)):.3f} (rad/s^2)")
+
+        # --- Fig 1: MOTOR ---
+        fig1, axs = plt.subplots(2, 1, figsize=(12, 7.5))
+        axs[0].plot(agg_horizons_t1, agg_rmse_t1, color="red")
+        axs[0].set_title("MOTOR position RMSE vs horizon (pooled across all runs)")
+        axs[0].set_xlabel("Horizon (s)")
+        axs[0].set_ylabel("RMSE (rad)")
+        axs[0].grid(True, alpha=0.3)
+
+        axs[1].scatter(sc_t1, sc_e1, s=1, color="red", alpha=0.2, label="Each run")
+        axs[1].plot(t_line1, rmse_line1, color="black", linewidth=1, label="RMSE across runs")
+        axs[1].set_title("MOTOR accel residual vs time since run start (all runs)")
+        axs[1].set_xlabel("Time since run start (s)")
+        axs[1].set_ylabel("Model - measured (rad/s^2)")
+        axs[1].legend()
+        axs[1].grid(True, alpha=0.3)
+        fig1.tight_layout()
+
+        # --- Fig 2: PENDULUM ---
+        fig2, axs = plt.subplots(2, 1, figsize=(12, 7.5))
+        axs[0].plot(agg_horizons_t2, agg_rmse_t2, color="blue")
+        axs[0].set_title("PENDULUM position RMSE vs horizon (pooled across all runs)")
+        axs[0].set_xlabel("Horizon (s)")
+        axs[0].set_ylabel("RMSE (rad)")
+        axs[0].grid(True, alpha=0.3)
+
+        axs[1].scatter(sc_t2, sc_e2, s=1, color="blue", alpha=0.2, label="Each run")
+        axs[1].plot(t_line2, rmse_line2, color="black", linewidth=1, label="RMSE across runs")
+        axs[1].set_title("PENDULUM accel residual vs time since run start (all runs)")
+        axs[1].set_xlabel("Time since run start (s)")
+        axs[1].set_ylabel("Model - measured (rad/s^2)")
+        axs[1].legend()
+        axs[1].grid(True, alpha=0.3)
+        fig2.tight_layout()
+
+        if save_dir is not None:
+            fig1.savefig(Path(save_dir) / "residuals_MOTOR.png", dpi=150)
+            fig2.savefig(Path(save_dir) / "residuals_PENDULUM.png", dpi=150)
+        plt.show()
+
+        # --- Save to pkl ---
+        if save_dir is not None:
+            agg_dict = {
+                'agg_horizons_t1': agg_horizons_t1,
+                'agg_rmse_t1': agg_rmse_t1,
+                'agg_horizons_t2': agg_horizons_t2,
+                'agg_rmse_t2': agg_rmse_t2,
+                'accel_t1dd': t_line1,
+                'accel_rmse_t1dd': rmse_line1,
+                'accel_t2dd': t_line2,
+                'accel_rmse_t2dd': rmse_line2,
+            }
+            with open(Path(save_dir) / "horizon_errors.pkl", "wb") as f:
+                pickle.dump(agg_dict, f)
+
+    """ Learned residual correction (gray-box simulator) """
+    @staticmethod
+    def _stribeck_one_sided(w, eps = 0.1):
+        decay = np.exp(-np.abs(w) / eps)
+        t = np.tanh(100 * w)
+        return decay * 0.5 * (1 + t), decay * 0.5 * (1 - t)
+
+    @classmethod
+    def _resid_features(cls, t1d, t2, t2d, tau):
+        s2 = np.sin(2 * t2)
+        cols = [
+            np.ones_like(t1d), tau, t1d, t2d, t1d*np.abs(t1d), t2d*np.abs(t2d),
+            np.tanh(50 * t1d), np.tanh(50 * t2d),
+            np.sin(t2), np.cos(t2),
+            t1d**2 * s2, t1d * t2d * s2,
+        ]
+        for w in (t1d, t2d):
+            pos, neg = cls._stribeck_one_sided(w, 0.1)
+            cols += [pos, neg]
+        return np.column_stack(cols)
+
+    def _resid_accel(self, t1d, t2, t2d, tau, coef):
+        F = self._resid_features(t1d, t2, t2d, tau) / self.resid_feat_scale
+        nf = F.shape[1]
+        return F @ coef[:nf], F @ coef[nf:]
+
+    def _deriv_batch(self, X, tau, coef):
+        """Vectorized dynamics: X is (N, 4), tau is (N,)."""
+        t1, t1d, t2, t2d = X.T
+        J1 = self.arm1_params["J1zz_hat"]; L1 = self.arm1_params["L_1"]; b1 = self.arm1_params["b1"]
+        J2yy = self.arm2_params["J2yy_hat"]; J2xx = self.arm2_params["J2xx"]; J2zz = self.arm2_params["J2zz_hat"]
+        m2 = self.arm2_params["m2"]; l2 = self.arm2_params["l2"]; b2 = self.arm2_params["b2"]
+        fs2 = self.arm2_params.get("fs2", 0.0); g = 9.81
+
+        s, c, s2 = np.sin(t2), np.cos(t2), np.sin(2 * t2)
+        g1 = J1 + m2 * L1**2 + J2yy * s**2 + J2xx * c**2
+        g2 = m2 * L1 * l2 * c
+        p1 = tau + m2 * L1 * l2 * s * t2d**2 - t1d * t2d * s2 * (J2yy - J2xx) - b1 * t1d
+        p2 = 0.5 * t1d**2 * s2 * (J2yy - J2xx) - b2 * t2d - g * m2 * l2 * s - fs2 * np.tanh(100 * t2d)
+
+        det = g1 * J2zz - g2**2
+        a1 = (J2zz * p1 - g2 * p2) / det
+        a2 = (g1 * p2 - g2 * p1) / det
+
+        if coef is not None:
+            r1, r2 = self._resid_accel(t1d, t2, t2d, tau, coef)
+            a1 = a1 + r1
+            a2 = a2 + r2
+        return np.column_stack([t1d, a1, t2d, a2])
+
+    def _rollout_batch(self, X0, TAU, coef, dt=0.001):
+        """RK4 rollouts of N windows in parallel. X0: (N, 4), TAU: (N, W). Returns (N, W, 4)."""
+        N, W = TAU.shape
+        out = np.empty((N, W, 4))
+        X = X0.copy()
+        out[:, 0] = X
+        for k in range(W - 1):
+            u = TAU[:, k]
+            k1 = self._deriv_batch(X, u, coef)
+            k2 = self._deriv_batch(X + 0.5 * dt * k1, u, coef)
+            k3 = self._deriv_batch(X + 0.5 * dt * k2, u, coef)
+            k4 = self._deriv_batch(X + dt * k3, u, coef)
+            X = X + (dt / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)
+            out[:, k + 1] = X
+        return out
+
+    def _build_windows(self, window_s, stride_s):
+        W, S = int(window_s * 1000), int(stride_s * 1000)
+        X0, TAU, T1, T2, T1D, T2D = [], [], [], [], [], []
+        for rl in self.runs_dict.values():
+            for run in rl:
+                tau = np.asarray(run["used_tau_filt"])
+                t1, t2 = np.asarray(run["pos"]), np.asarray(run["pend_pos"])
+                t1d, t2d = np.asarray(run["vel_filt"]), np.asarray(run["pend_vel_filt"])
+                for s in range(0, len(tau) - W, S):
+                    X0.append([t1[s], t1d[s], t2[s], t2d[s]])
+                    TAU.append(tau[s:s+W]); T1.append(t1[s:s+W]); T2.append(t2[s:s+W])
+                    T1D.append(t1d[s:s+W]); T2D.append(t2d[s:s+W])
+        return tuple(np.array(a) for a in (X0, TAU, T1, T2, T1D, T2D))
+
+    def fit_residual_model(self, window_s=1.0, stride_s=0.25, lam=1e-4, error_weights = (1.0, 1.0), ftol_lsq = 1e-7, loss_lsq = "soft_l1", use_vel=False):
+        """
+        Learn a correction to the physics accelerations that minimizes multi-step
+        rollout error. Physics params stay as-is; only resid_coef is fit.
+        """
+        self.filter_runs()
+        X0, TAU, T1, T2, T1D, T2D = self._build_windows(window_s, stride_s)
+        print(f"Fitting residual model on {len(X0)} windows of {window_s}s")
+
+        # Feature normalization (from all samples) so coefficients are well-conditioned
+        F_all = self._resid_features(T1D.ravel(), T2.ravel(), T2D.ravel(), TAU.ravel())
+        self.resid_feat_scale = np.std(F_all, axis=0) + 1e-9
+        self.resid_feat_scale[0] = 1.0   # bias column has zero std
+        nf = F_all.shape[1]
+
+        # Error normalization so motor and pendulum contribute comparably
+        s1 = np.std(T1 - T1[:, [0]]) + 1e-6
+        s2 = np.std(T2 - T2[:, [0]]) + 1e-6
+        s1d, s2d = np.std(T1D) + 1e-6, np.std(T2D) + 1e-6
+
+        best = {"cost": np.inf, "calls": 0}
+        def residuals(coef):
+            out = self._rollout_batch(X0, TAU, coef)
+            m_err = error_weights[0]*(out[:, :, 0] - T1) / s1
+            p_err = error_weights[1]*(out[:, :, 2] - T2) / s2
+
+            # Progress print: unweighted costs, only on meaningful improvement
+            best["calls"] += 1
+            motor_cost, pend_cost = np.sum(m_err**2), np.sum(p_err**2)
+            total = motor_cost + pend_cost
+            if total < best["cost"] * (1 - 1e-6):
+                best["cost"] = total
+                print(f"[call {best['calls']:4d}] weighted motor {motor_cost:.4e}  "
+                      f"weighted pend {pend_cost:.4e}  (weighted pend share {pend_cost / total:.1%})")
+
+            r = [(m_err).ravel(),
+                 (p_err).ravel()]
+            if use_vel:
+                r += [(error_weights[0] * (out[:, :, 1] - T1D) / s1d).ravel(),
+                      (error_weights[1] * (out[:, :, 3] - T2D) / s2d).ravel()]
+            r.append(np.sqrt(lam * len(r[0])) * coef)   # L2 penalty on weights
+            return np.concatenate(r)
+
+        x0 = np.zeros(2 * nf) if self.resid_coef is None else self.resid_coef
+        result = least_squares(residuals, x0, method="trf", loss=loss_lsq,
+                               x_scale="jac", verbose=2, ftol = ftol_lsq)
+        self.resid_coef = result.x
+        return result
+    
+    def save_residual_model(self, save_dir, name="residual_model", header_path=None):
+        """
+        Saves the learned correction (pkl + json), along with a snapshot of the
+        physics params it was fit on. Optionally writes a C++ header.
+        """
+        if self.resid_coef is None:
+            print("No residual model fit yet - nothing to save")
+            return
+
+        save_dir = Path(save_dir)
+        save_dir.mkdir(parents=True, exist_ok=True)
+        model = {
+            "resid_coef": np.asarray(self.resid_coef).tolist(),
+            "resid_feat_scale": np.asarray(self.resid_feat_scale).tolist(),
+            "feature_names": self.RESID_FEATURE_NAMES,
+            "arm1_params": {k: float(v) for k, v in self.arm1_params.items()},
+            "arm2_params": {k: float(v) for k, v in self.arm2_params.items()},
+        }
+        with open(save_dir / f"{name}.pkl", "wb") as f:
+            pickle.dump(model, f)
+        (save_dir / f"{name}.json").write_text(json.dumps(model, indent=2))
+        print(f"Saved residual model to {save_dir / name}.pkl/.json")
+
+        if header_path is not None:
+            header_path = Path(header_path)
+            header_path.mkdir(parents=True, exist_ok=True)
+            nf = len(self.RESID_FEATURE_NAMES)
+            coef_str = ", ".join(f"{c:.8e}f" for c in model["resid_coef"])
+            scale_str = ", ".join(f"{s:.8e}f" for s in model["resid_feat_scale"])
+            with open(header_path / f"{name}.hpp", "w") as f:
+                f.write("#pragma once\n\n")
+                f.write("namespace ResidualModel {\n\n")
+                f.write(f"// Feature order: {', '.join(self.RESID_FEATURE_NAMES)}\n")
+                f.write(f"// accel_corr_motor = sum_j (feat_j / feat_scale[j]) * coef[j]\n")
+                f.write(f"// accel_corr_pend  = sum_j (feat_j / feat_scale[j]) * coef[{nf} + j]\n\n")
+                f.write(f"constexpr int NF = {nf};\n\n")
+                f.write(f"constexpr float coef[{2 * nf}] = {{{coef_str}}};\n\n")
+                f.write(f"constexpr float feat_scale[{nf}] = {{{scale_str}}};\n\n")
+                f.write("} // namespace ResidualModel\n")
+            print(f"Wrote {header_path / name}.hpp")
+
+    def load_residual_model(self, path, check_params=True):
+        """
+        Loads a saved correction. Call AFTER load_params_from_configs so the
+        physics-param check is meaningful: the correction is only valid on top of
+        the physics params it was fit with.
+        """
+        with open(path, "rb") as f:
+            model = pickle.load(f)
+        self.resid_coef = np.asarray(model["resid_coef"])
+        self.resid_feat_scale = np.asarray(model["resid_feat_scale"])
+
+        if check_params:
+            for arm_key, cur in (("arm1_params", self.arm1_params), ("arm2_params", self.arm2_params)):
+                for k, v in model[arm_key].items():
+                    if k in cur and not np.isclose(cur[k], v, rtol=1e-6):
+                        print(f"WARNING: {k} = {cur[k]:.6g} now, but residual model was fit with {v:.6g}")
+        print(f"Loaded residual model from {path}")
+
+    # ---------------------------------------------------------------------------
+    # Residual model: compare against physics-only
+    # ---------------------------------------------------------------------------
+    def compare_residual_model(self, sim_s=None, save_dir=None):
+        """
+        For each run, forward-simulate from the measured initial state with:
+          - physics only (the original fit)
+          - physics + learned residual correction
+        and plot both against the measured positions, with error underneath.
+
+        sim_s: optional cap on simulated duration (s). None = whole run.
+        """
+        if self.resid_coef is None:
+            raise ValueError("No residual model - fit or load one first")
+        if not self.runs_parsed:
+            self.parse_runs()
+        self.filter_runs()
+
+        summary = []
+        for (name, run_list) in self.runs_dict.items():
+            for (i, run) in enumerate(run_list):
+                tau = np.asarray(run["used_tau_filt"])
+                t1, t2 = np.asarray(run["pos"]), np.asarray(run["pend_pos"])
+                t1d, t2d = np.asarray(run["vel_filt"]), np.asarray(run["pend_vel_filt"])
+
+                n = len(tau) if sim_s is None else min(len(tau), int(sim_s * 1000))
+                t = (np.asarray(run["time"][:n]) - run["time"][0]) / 1000.0
+
+                X0 = np.array([[t1[0], t1d[0], t2[0], t2d[0]]])
+                TAU = tau[None, :n]
+                out_phys = self._rollout_batch(X0, TAU, None)[0]              # (n, 4)
+                out_resid = self._rollout_batch(X0, TAU, self.resid_coef)[0]  # (n, 4)
+
+                err1_phys, err1_resid = out_phys[:, 0] - t1[:n], out_resid[:, 0] - t1[:n]
+                err2_phys, err2_resid = out_phys[:, 2] - t2[:n], out_resid[:, 2] - t2[:n]
+                rms = lambda e: np.sqrt(np.mean(e**2))
+                summary.append((f"{name}_{i}", rms(err1_phys), rms(err1_resid),
+                                rms(err2_phys), rms(err2_resid)))
+
+                fig, axs = plt.subplots(4, 1, figsize=(12, 10), sharex=True,
+                                        gridspec_kw={"height_ratios": [2, 1, 2, 1]})
+
+                # Motor position
+                axs[0].plot(t, t1[:n], color="black", linewidth=1.5, label="Measured")
+                axs[0].plot(t, out_phys[:, 0], color="tab:orange", linewidth=1, label="Physics only")
+                axs[0].plot(t, out_resid[:, 0], color="tab:green", linewidth=1, label="Physics + residual")
+                axs[0].set_ylabel("Motor pos (rad)")
+                axs[0].set_title(f"{name}_{i}: forward simulation comparison")
+                axs[0].legend()
+
+                # Motor error
+                axs[1].plot(t, err1_phys, color="tab:orange", linewidth=1,
+                            label=f"Physics only (RMS {rms(err1_phys):.3f})")
+                axs[1].plot(t, err1_resid, color="tab:green", linewidth=1,
+                            label=f"Physics + residual (RMS {rms(err1_resid):.3f})")
+                axs[1].axhline(0, color="black", linewidth=0.5)
+                axs[1].set_ylabel("Motor err (rad)")
+                axs[1].legend()
+
+                # Pendulum position
+                axs[2].plot(t, t2[:n], color="black", linewidth=1.5, label="Measured")
+                axs[2].plot(t, out_phys[:, 2], color="tab:orange", linewidth=1, label="Physics only")
+                axs[2].plot(t, out_resid[:, 2], color="tab:green", linewidth=1, label="Physics + residual")
+                axs[2].set_ylabel("Pend pos (rad)")
+                axs[2].legend()
+
+                # Pendulum error
+                axs[3].plot(t, err2_phys, color="tab:orange", linewidth=1,
+                            label=f"Physics only (RMS {rms(err2_phys):.3f})")
+                axs[3].plot(t, err2_resid, color="tab:green", linewidth=1,
+                            label=f"Physics + residual (RMS {rms(err2_resid):.3f})")
+                axs[3].axhline(0, color="black", linewidth=0.5)
+                axs[3].set_ylabel("Pend err (rad)")
+                axs[3].set_xlabel("Time since run start (s)")
+                axs[3].legend()
+
+                for ax in axs:
+                    ax.grid(True, alpha=0.3)
+                fig.tight_layout()
+
+                if save_dir is not None:
+                    fig.savefig(Path(save_dir) / f"resid_compare_{name}_{i}.png", dpi=150)
+                plt.show()
+
+        # Summary table
+        print(f"\n{'Run':<40}{'Motor phys':>12}{'Motor +res':>12}{'Pend phys':>12}{'Pend +res':>12}")
+        for row in summary:
+            print(f"{row[0]:<40}{row[1]:>12.4f}{row[2]:>12.4f}{row[3]:>12.4f}{row[4]:>12.4f}")
+        return summary
+
+
 # ---------------------------------------------------------------------------
 # Fit dat data
 # ---------------------------------------------------------------------------
@@ -1242,18 +1658,42 @@ if __name__ == "__main__":
 
     ### LINEAR FIT ###
     print("-----Linear (with J1)-----")
-    result = analyzer.fit_linear_withJ1(debug=False, filter_bw = 25)
+    result = analyzer.fit_linear_combo(debug=False, filter_bw = 25)
     analyzer.store_params_to_configs(header_path=header_path)
     #analyzer.simulate_runs()
 
-    # TEST
+    # # Check residuals
+    # analyzer.plot_run_error_horizons(debug=False, save_dir=config_path)
+
+    # # Fit and test residual model
+    # print(f"fit with stride_s = 0.5 = {analyzer.fit_residual_model(window_s=0.5, stride_s=0.5, use_vel=False)}")
+    # analyzer.save_residual_model(config_path, header_path=header_path)
+    # print(f"fit with stride_s = 1.5 = {analyzer.fit_residual_model(window_s=1.5, stride_s=1.5, use_vel=False)}")
+    # analyzer.save_residual_model(config_path, header_path=header_path)
+    # analyzer.compare_residual_model()
+
+    # # TEST
+    # print("~~~Moving to tester")
+    # tester = FurataAnalyzer(cog_path, tau_filter_bw=25)
+    # tester.load_params_from_configs(config_path=config_path, withFs=True)
+    # tester.add_all_logs(base_path, identifier="generated")
+    # tester.parse_runs(doPlot=False, trim = 10)
+    # tester.filter_runs()
+    # tester.simulate_runs()
+
+    # Fit residuals on TEST
     print("~~~Moving to tester")
     tester = FurataAnalyzer(cog_path, tau_filter_bw=25)
     tester.load_params_from_configs(config_path=config_path, withFs=True)
     tester.add_all_logs(base_path, identifier="generated")
     tester.parse_runs(doPlot=False, trim = 10)
     tester.filter_runs()
-    tester.simulate_runs()
+    #tester.simulate_runs()
+    print(f"fit with stride_s = 0.5 = {tester.fit_residual_model(window_s=0.5, stride_s=0.5, error_weights=(1.0, 2.3), loss_lsq = "linear", use_vel=False)}")
+    tester.save_residual_model(config_path, header_path=header_path, name = "residual_model_s05_w23_linear")
+    print(f"fit with stride_s = 1.5 = {tester.fit_residual_model(window_s=1.5, stride_s=1.5, error_weights=(1.0, 2.3), loss_lsq = "linear", use_vel=False)}")
+    tester.save_residual_model(config_path, header_path=header_path, name = "residual_model_s15_w23_linear")
+    tester.compare_residual_model()
 
     # # ### NONLINEAR FIT ###
     # print("-----Nonlinear (with J1)-----")

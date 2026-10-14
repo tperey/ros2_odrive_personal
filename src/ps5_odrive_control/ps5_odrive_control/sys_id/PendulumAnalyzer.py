@@ -442,33 +442,33 @@ if __name__ == "__main__":
     g = 9.81  # [m/s^2]
     l = (77.171 - 30.0)/1000.0  # [m]
 
-    # Linear fit
-    linear_fit = analyzer.fit_linear(mgl=(m*g*l), debug=False)
+    # """ Linear fit """"
+    # linear_fit = analyzer.fit_linear(mgl=(m*g*l), debug=False)
 
-    J_fit, b_fit = linear_fit.x
-    print(f"Result of Linear Method: J = {J_fit}, b = {b_fit}")
+    # J_fit, b_fit = linear_fit.x
+    # print(f"Result of Linear Method: J = {J_fit}, b = {b_fit}")
 
-    #analyzer.test_fit(J_fit, b_fit, (m*g*l))
+    # #analyzer.test_fit(J_fit, b_fit, (m*g*l))
 
-    print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
+    # print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
 
-    """ Non-linear fit """
-    nonlinear_fit = analyzer.fit_nonlinear((m*g*l), 1e-4, 1e-4, 0.0)
+    # """ Non-linear fit """
+    # nonlinear_fit = analyzer.fit_nonlinear((m*g*l), 1e-4, 1e-4, 0.0)
 
-    J_n_fit, b_n_fit = nonlinear_fit.x
-    print(f"Result of NON-Linear Method: J = {J_n_fit}, b = {b_n_fit}")
+    # J_n_fit, b_n_fit = nonlinear_fit.x
+    # print(f"Result of NON-Linear Method: J = {J_n_fit}, b = {b_n_fit}")
 
-    #analyzer.test_fit(J_n_fit, b_n_fit, (m*g*l))
+    # #analyzer.test_fit(J_n_fit, b_n_fit, (m*g*l))
 
-    print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
+    # print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
 
-    # Save results
-    L_2 = (150.83186 - 3)/1000.0
-    analyzer.save_linear_params(J_n_fit, b_n_fit, m, l, L_2)
-    savebase_path = "/Users/trevorperey/Desktop/PersonalProjects/ros2_odrive_personal/"
-    config_path = savebase_path + "config/m8325s_furata/"
-    header_path = savebase_path + "Teensy_ODrive_PIO/lib/config/m8325s_furata/"
-    analyzer.output_configs(config_path, header_path)
+    # # Save results
+    # L_2 = (150.83186 - 3)/1000.0
+    # analyzer.save_linear_params(J_n_fit, b_n_fit, m, l, L_2)
+    # savebase_path = "/Users/trevorperey/Desktop/PersonalProjects/ros2_odrive_personal/"
+    # config_path = savebase_path + "config/m8325s_furata/"
+    # header_path = savebase_path + "Teensy_ODrive_PIO/lib/config/m8325s_furata/"
+    # analyzer.output_configs(config_path, header_path)
 
     """ Non-linear fit, with friction """
     k_to_use = 10
@@ -476,8 +476,6 @@ if __name__ == "__main__":
 
     Jnfs_fit, bnfs_fit, fs_fit = fs_nonlinear_fit.x
     print(f"Result of Nonlinear method WITH FRICTION: J = {Jnfs_fit}, b = {bnfs_fit}, fs = {fs_fit}")
-
-    #analyzer.test_fs_fit(Jnfs_fit, bnfs_fit, (m*g*l), fs_fit, k_to_use)
 
     print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
     
@@ -488,3 +486,5 @@ if __name__ == "__main__":
     config_path = savebase_path + "config/m8325s_furata/"
     header_path = savebase_path + "Teensy_ODrive_PIO/lib/config/m8325s_furata/"
     analyzer.output_fs_configs(config_path, header_path)
+
+    analyzer.test_fs_fit(Jnfs_fit, bnfs_fit, (m*g*l), fs_fit, k_to_use)
