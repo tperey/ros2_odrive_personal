@@ -1426,8 +1426,18 @@ class FurataAnalyzer:
             out[:, k + 1] = X
         return out
 
-    def _build_windows(self, window_s, stride_s):
+    # ---------------------------------------------------------------------------
+    # Residual model: windows, fit, save/load, compare
+    # ---------------------------------------------------------------------------
+    def _build_windows(self, window_s, stride_s, dec=1):
+        """
+        Cut every run into fixed-length windows, sampled every `dec` ms.
+        Torque uses zero-order hold: the sample at the start of each step is held
+        for the whole step, so TAU[:, k] is the torque applied between state k and k+1.
+        Returns X0 (N,4), TAU/T1/T2/T1D/T2D (N, W/dec).
+        """
         W, S = int(window_s * 1000), int(stride_s * 1000)
+        W -= W % dec                                     # window length divisible by dec
         X0, TAU, T1, T2, T1D, T2D = [], [], [], [], [], []
         for rl in self.runs_dict.values():
             for run in rl:
@@ -1436,18 +1446,22 @@ class FurataAnalyzer:
                 t1d, t2d = np.asarray(run["vel_filt"]), np.asarray(run["pend_vel_filt"])
                 for s in range(0, len(tau) - W, S):
                     X0.append([t1[s], t1d[s], t2[s], t2d[s]])
-                    TAU.append(tau[s:s+W]); T1.append(t1[s:s+W]); T2.append(t2[s:s+W])
-                    T1D.append(t1d[s:s+W]); T2D.append(t2d[s:s+W])
+                    TAU.append(tau[s:s+W:dec])                       # ZOH: sample at step start
+                    T1.append(t1[s:s+W:dec]);   T2.append(t2[s:s+W:dec])
+                    T1D.append(t1d[s:s+W:dec]); T2D.append(t2d[s:s+W:dec])
         return tuple(np.array(a) for a in (X0, TAU, T1, T2, T1D, T2D))
 
-    def fit_residual_model(self, window_s=1.0, stride_s=0.25, lam=1e-4, error_weights = (1.0, 1.0), ftol_lsq = 1e-7, loss_lsq = "soft_l1", use_vel=False):
+    def fit_residual_model(self, window_s=1.0, stride_s=0.25, lam=1e-4, error_weights=(1.0, 1.0),
+                           ftol_lsq=1e-7, loss_lsq="soft_l1", use_vel=False, dec=1):
         """
         Learn a correction to the physics accelerations that minimizes multi-step
         rollout error. Physics params stay as-is; only resid_coef is fit.
+        dec: integration step in ms (ZOH torque over each step). dec=5 is ~5x faster.
         """
         self.filter_runs()
-        X0, TAU, T1, T2, T1D, T2D = self._build_windows(window_s, stride_s)
-        print(f"Fitting residual model on {len(X0)} windows of {window_s}s")
+        X0, TAU, T1, T2, T1D, T2D = self._build_windows(window_s, stride_s, dec=dec)
+        dt = dec * 1e-3
+        print(f"Fitting residual model on {len(X0)} windows of {window_s}s, dt = {dec} ms")
 
         # Feature normalization (from all samples) so coefficients are well-conditioned
         F_all = self._resid_features(T1D.ravel(), T2.ravel(), T2D.ravel(), TAU.ravel())
@@ -1461,22 +1475,22 @@ class FurataAnalyzer:
         s1d, s2d = np.std(T1D) + 1e-6, np.std(T2D) + 1e-6
 
         best = {"cost": np.inf, "calls": 0}
-        def residuals(coef):
-            out = self._rollout_batch(X0, TAU, coef)
-            m_err = error_weights[0]*(out[:, :, 0] - T1) / s1
-            p_err = error_weights[1]*(out[:, :, 2] - T2) / s2
 
-            # Progress print: unweighted costs, only on meaningful improvement
+        def residuals(coef):
+            out = self._rollout_batch(X0, TAU, coef, dt=dt)
+            m_err = error_weights[0] * (out[:, :, 0] - T1) / s1
+            p_err = error_weights[1] * (out[:, :, 2] - T2) / s2
+
+            # Progress print: WEIGHTED costs (what the optimizer balances), only on meaningful improvement
             best["calls"] += 1
             motor_cost, pend_cost = np.sum(m_err**2), np.sum(p_err**2)
             total = motor_cost + pend_cost
             if total < best["cost"] * (1 - 1e-6):
                 best["cost"] = total
-                print(f"[call {best['calls']:4d}] weighted motor {motor_cost:.4e}  "
-                      f"weighted pend {pend_cost:.4e}  (weighted pend share {pend_cost / total:.1%})")
+                print(f"         [call {best['calls']:4d}] weighted: motor {motor_cost:.4e}  pend {pend_cost:.4e}  "
+                      f"(pend share {pend_cost / total:.1%})  |  unweighted pend {pend_cost / error_weights[1]**2:.4e}")
 
-            r = [(m_err).ravel(),
-                 (p_err).ravel()]
+            r = [m_err.ravel(), p_err.ravel()]
             if use_vel:
                 r += [(error_weights[0] * (out[:, :, 1] - T1D) / s1d).ravel(),
                       (error_weights[1] * (out[:, :, 3] - T2D) / s2d).ravel()]
@@ -1485,14 +1499,23 @@ class FurataAnalyzer:
 
         x0 = np.zeros(2 * nf) if self.resid_coef is None else self.resid_coef
         result = least_squares(residuals, x0, method="trf", loss=loss_lsq,
-                               x_scale="jac", verbose=2, ftol = ftol_lsq)
+                               x_scale="jac", verbose=2, ftol=ftol_lsq)
         self.resid_coef = result.x
+        self.resid_dec = dec
+
+        # Checkpoint immediately so a later crash can't lose a long fit
+        ckpt_dir = Path(self.config_folder) if self.config_folder else Path(".")
+        with open(ckpt_dir / "resid_checkpoint.pkl", "wb") as f:
+            pickle.dump({"resid_coef": self.resid_coef,
+                         "resid_feat_scale": self.resid_feat_scale,
+                         "dec": dec}, f)
+        print(f"Checkpointed residual fit to {ckpt_dir / 'resid_checkpoint.pkl'}")
         return result
-    
+
     def save_residual_model(self, save_dir, name="residual_model", header_path=None):
         """
-        Saves the learned correction (pkl + json), along with a snapshot of the
-        physics params it was fit on. Optionally writes a C++ header.
+        Saves the learned correction (pkl + json), along with the integration step
+        and a snapshot of the physics params it was fit on. Optionally writes a C++ header.
         """
         if self.resid_coef is None:
             print("No residual model fit yet - nothing to save")
@@ -1504,8 +1527,9 @@ class FurataAnalyzer:
             "resid_coef": np.asarray(self.resid_coef).tolist(),
             "resid_feat_scale": np.asarray(self.resid_feat_scale).tolist(),
             "feature_names": self.RESID_FEATURE_NAMES,
-            "arm1_params": {k: float(v) for k, v in self.arm1_params.items()},
-            "arm2_params": {k: float(v) for k, v in self.arm2_params.items()},
+            "dec": int(self.resid_dec),
+            "arm1_params": {k: float(v) for k, v in self.arm1_params.items() if isinstance(v, (int, float))},
+            "arm2_params": {k: float(v) for k, v in self.arm2_params.items() if isinstance(v, (int, float))},
         }
         with open(save_dir / f"{name}.pkl", "wb") as f:
             pickle.dump(model, f)
@@ -1523,8 +1547,10 @@ class FurataAnalyzer:
                 f.write("namespace ResidualModel {\n\n")
                 f.write(f"// Feature order: {', '.join(self.RESID_FEATURE_NAMES)}\n")
                 f.write(f"// accel_corr_motor = sum_j (feat_j / feat_scale[j]) * coef[j]\n")
-                f.write(f"// accel_corr_pend  = sum_j (feat_j / feat_scale[j]) * coef[{nf} + j]\n\n")
+                f.write(f"// accel_corr_pend  = sum_j (feat_j / feat_scale[j]) * coef[{nf} + j]\n")
+                f.write(f"// Fit with integration step dt = {model['dec']} ms (ZOH torque)\n\n")
                 f.write(f"constexpr int NF = {nf};\n\n")
+                f.write(f"constexpr int FIT_DT_MS = {model['dec']};\n\n")
                 f.write(f"constexpr float coef[{2 * nf}] = {{{coef_str}}};\n\n")
                 f.write(f"constexpr float feat_scale[{nf}] = {{{scale_str}}};\n\n")
                 f.write("} // namespace ResidualModel\n")
@@ -1540,18 +1566,16 @@ class FurataAnalyzer:
             model = pickle.load(f)
         self.resid_coef = np.asarray(model["resid_coef"])
         self.resid_feat_scale = np.asarray(model["resid_feat_scale"])
+        self.resid_dec = int(model.get("dec", 1))
 
-        if check_params:
+        if check_params and "arm1_params" in model:
             for arm_key, cur in (("arm1_params", self.arm1_params), ("arm2_params", self.arm2_params)):
                 for k, v in model[arm_key].items():
                     if k in cur and not np.isclose(cur[k], v, rtol=1e-6):
                         print(f"WARNING: {k} = {cur[k]:.6g} now, but residual model was fit with {v:.6g}")
-        print(f"Loaded residual model from {path}")
+        print(f"Loaded residual model from {path} (fit with dt = {self.resid_dec} ms)")
 
-    # ---------------------------------------------------------------------------
-    # Residual model: compare against physics-only
-    # ---------------------------------------------------------------------------
-    def compare_residual_model(self, sim_s=None, save_dir=None):
+    def compare_residual_model(self, sim_s=None, save_dir=None, dec=1, show=True):
         """
         For each run, forward-simulate from the measured initial state with:
           - physics only (the original fit)
@@ -1559,12 +1583,17 @@ class FurataAnalyzer:
         and plot both against the measured positions, with error underneath.
 
         sim_s: optional cap on simulated duration (s). None = whole run.
+        dec:   integration step in ms (ZOH torque). Use 1 to check behaviour at the
+               rate the real controller runs, or self.resid_dec to match training.
+        show:  if False, figures are saved (if save_dir) and closed without blocking.
         """
         if self.resid_coef is None:
             raise ValueError("No residual model - fit or load one first")
         if not self.runs_parsed:
             self.parse_runs()
         self.filter_runs()
+        dt = dec * 1e-3
+        rms = lambda e: np.sqrt(np.mean(e**2))
 
         summary = []
         for (name, run_list) in self.runs_dict.items():
@@ -1574,31 +1603,32 @@ class FurataAnalyzer:
                 t1d, t2d = np.asarray(run["vel_filt"]), np.asarray(run["pend_vel_filt"])
 
                 n = len(tau) if sim_s is None else min(len(tau), int(sim_s * 1000))
-                t = (np.asarray(run["time"][:n]) - run["time"][0]) / 1000.0
+                n -= n % dec
+                if n < 2 * dec:
+                    continue
+                t = (np.asarray(run["time"][:n:dec]) - run["time"][0]) / 1000.0
+                m1, m2 = t1[:n:dec], t2[:n:dec]                               # measured, on sim grid
 
                 X0 = np.array([[t1[0], t1d[0], t2[0], t2d[0]]])
-                TAU = tau[None, :n]
-                out_phys = self._rollout_batch(X0, TAU, None)[0]              # (n, 4)
-                out_resid = self._rollout_batch(X0, TAU, self.resid_coef)[0]  # (n, 4)
+                TAU = tau[:n:dec][None, :]                                     # ZOH: sample at step start
+                out_phys = self._rollout_batch(X0, TAU, None, dt=dt)[0]
+                out_resid = self._rollout_batch(X0, TAU, self.resid_coef, dt=dt)[0]
 
-                err1_phys, err1_resid = out_phys[:, 0] - t1[:n], out_resid[:, 0] - t1[:n]
-                err2_phys, err2_resid = out_phys[:, 2] - t2[:n], out_resid[:, 2] - t2[:n]
-                rms = lambda e: np.sqrt(np.mean(e**2))
+                err1_phys, err1_resid = out_phys[:, 0] - m1, out_resid[:, 0] - m1
+                err2_phys, err2_resid = out_phys[:, 2] - m2, out_resid[:, 2] - m2
                 summary.append((f"{name}_{i}", rms(err1_phys), rms(err1_resid),
                                 rms(err2_phys), rms(err2_resid)))
 
                 fig, axs = plt.subplots(4, 1, figsize=(12, 10), sharex=True,
                                         gridspec_kw={"height_ratios": [2, 1, 2, 1]})
 
-                # Motor position
-                axs[0].plot(t, t1[:n], color="black", linewidth=1.5, label="Measured")
+                axs[0].plot(t, m1, color="black", linewidth=1.5, label="Measured")
                 axs[0].plot(t, out_phys[:, 0], color="tab:orange", linewidth=1, label="Physics only")
                 axs[0].plot(t, out_resid[:, 0], color="tab:green", linewidth=1, label="Physics + residual")
                 axs[0].set_ylabel("Motor pos (rad)")
-                axs[0].set_title(f"{name}_{i}: forward simulation comparison")
+                axs[0].set_title(f"{name}_{i}: forward simulation comparison (dt = {dec} ms)")
                 axs[0].legend()
 
-                # Motor error
                 axs[1].plot(t, err1_phys, color="tab:orange", linewidth=1,
                             label=f"Physics only (RMS {rms(err1_phys):.3f})")
                 axs[1].plot(t, err1_resid, color="tab:green", linewidth=1,
@@ -1607,14 +1637,12 @@ class FurataAnalyzer:
                 axs[1].set_ylabel("Motor err (rad)")
                 axs[1].legend()
 
-                # Pendulum position
-                axs[2].plot(t, t2[:n], color="black", linewidth=1.5, label="Measured")
+                axs[2].plot(t, m2, color="black", linewidth=1.5, label="Measured")
                 axs[2].plot(t, out_phys[:, 2], color="tab:orange", linewidth=1, label="Physics only")
                 axs[2].plot(t, out_resid[:, 2], color="tab:green", linewidth=1, label="Physics + residual")
                 axs[2].set_ylabel("Pend pos (rad)")
                 axs[2].legend()
 
-                # Pendulum error
                 axs[3].plot(t, err2_phys, color="tab:orange", linewidth=1,
                             label=f"Physics only (RMS {rms(err2_phys):.3f})")
                 axs[3].plot(t, err2_resid, color="tab:green", linewidth=1,
@@ -1629,13 +1657,20 @@ class FurataAnalyzer:
                 fig.tight_layout()
 
                 if save_dir is not None:
-                    fig.savefig(Path(save_dir) / f"resid_compare_{name}_{i}.png", dpi=150)
-                plt.show()
+                    fig.savefig(Path(save_dir) / f"resid_compare_{name}_{i}_dt{dec}.png", dpi=150)
+                if show:
+                    plt.show()
+                else:
+                    plt.close(fig)
 
         # Summary table
         print(f"\n{'Run':<40}{'Motor phys':>12}{'Motor +res':>12}{'Pend phys':>12}{'Pend +res':>12}")
         for row in summary:
             print(f"{row[0]:<40}{row[1]:>12.4f}{row[2]:>12.4f}{row[3]:>12.4f}{row[4]:>12.4f}")
+        if summary:
+            arr = np.array([r[1:] for r in summary])
+            print(f"{'MEAN':<40}{arr[:,0].mean():>12.4f}{arr[:,1].mean():>12.4f}"
+                  f"{arr[:,2].mean():>12.4f}{arr[:,3].mean():>12.4f}")
         return summary
 
 
@@ -1689,11 +1724,20 @@ if __name__ == "__main__":
     tester.parse_runs(doPlot=False, trim = 10)
     tester.filter_runs()
     #tester.simulate_runs()
-    print(f"fit with stride_s = 0.5 = {tester.fit_residual_model(window_s=0.5, stride_s=0.5, error_weights=(1.0, 2.3), loss_lsq = "linear", use_vel=False)}")
-    tester.save_residual_model(config_path, header_path=header_path, name = "residual_model_s05_w23_linear")
-    print(f"fit with stride_s = 1.5 = {tester.fit_residual_model(window_s=1.5, stride_s=1.5, error_weights=(1.0, 2.3), loss_lsq = "linear", use_vel=False)}")
-    tester.save_residual_model(config_path, header_path=header_path, name = "residual_model_s15_w23_linear")
-    tester.compare_residual_model()
+
+    common = dict(error_weights=(1.0, 2.3), loss_lsq="linear", use_vel=False, dec=5, lam=1e-4, ftol_lsq=1e-6)
+    for w in [0.5, 1.5, 3.0, 4.0, 5.0]:  # Fit to windows of progressive sizes, with warm starts and intermediate saves
+        print(f"\n===== Window {w} s =====")
+        cur_result = tester.fit_residual_model(window_s=w, stride_s=w, **common)
+        print(cur_result)
+        tester.save_residual_model(config_path, header_path=header_path,
+                                   name=f"residual_model_s{str(w).replace('.', 'p')}_w23_linear_dt5")
+    
+    for w in [0.5, 1.5, 3.0, 4.0, 5.0]:  # Eval fits independently
+        name = f"residual_model_s{str(w).replace('.', 'p')}_w23_linear_dt5"
+        tester.load_residual_model(Path(config_path) / f"{name}.pkl")
+        print(f"\n===== Evaluating {name} =====")
+        tester.compare_residual_model()
 
     # # ### NONLINEAR FIT ###
     # print("-----Nonlinear (with J1)-----")
