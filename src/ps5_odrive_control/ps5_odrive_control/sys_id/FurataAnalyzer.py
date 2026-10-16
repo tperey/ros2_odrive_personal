@@ -1726,18 +1726,18 @@ if __name__ == "__main__":
     #tester.simulate_runs()
 
     common = dict(error_weights=(1.0, 2.3), loss_lsq="linear", use_vel=False, dec=5, lam=1e-4, ftol_lsq=1e-6)
-    for w in [0.5, 1.5, 3.0, 4.0, 5.0]:  # Fit to windows of progressive sizes, with warm starts and intermediate saves
+    for w in [0.3, 0.6, 0.9, 1.0, 1.2, 1.5]:  # Fit to windows of progressive sizes, with warm starts and intermediate saves
         print(f"\n===== Window {w} s =====")
         cur_result = tester.fit_residual_model(window_s=w, stride_s=w, **common)
         print(cur_result)
         tester.save_residual_model(config_path, header_path=header_path,
-                                   name=f"residual_model_s{str(w).replace('.', 'p')}_w23_linear_dt5")
+                                   name=f"residual_model_s05to{str(w).replace('.', 'p')}_w23_linear_dt5")
     
-    for w in [0.5, 1.5, 3.0, 4.0, 5.0]:  # Eval fits independently
-        name = f"residual_model_s{str(w).replace('.', 'p')}_w23_linear_dt5"
+    for w in [1.2]:  # Eval fits independently
+        name = f"residual_model_s05to{str(w).replace('.', 'p')}_w23_linear_dt5"
         tester.load_residual_model(Path(config_path) / f"{name}.pkl")
         print(f"\n===== Evaluating {name} =====")
-        tester.compare_residual_model()
+        tester.compare_residual_model(sim_s = w, dec = 5)
 
     # # ### NONLINEAR FIT ###
     # print("-----Nonlinear (with J1)-----")
