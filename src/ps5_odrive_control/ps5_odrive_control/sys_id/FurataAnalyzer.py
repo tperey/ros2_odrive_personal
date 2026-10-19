@@ -56,6 +56,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from CoggingAnalyzer import COUNTS_PER_REV
 from pathlib import Path
+from scipy.signal import cont2discrete
+from scipy.linalg import solve_discrete_are, expm
 
 class FurataAnalyzer:
 
@@ -1166,6 +1168,138 @@ class FurataAnalyzer:
         print(result)
         return result
 
+    # # ---------------------------------------------------------------------------
+    # # Discrete LQR
+    # # ---------------------------------------------------------------------------
+    def _obtain_linear_statespace_matrices(self):
+        """
+        Linearize about upright (theta2 = pi).
+        State order: [t1, t2, t1d, t2d]  (NOT the simulator's [t1, t1d, t2, t2d])
+        """
+        # Unpack params
+        J1zz_hat = self.arm1_params['J1zz_hat']
+        b1 = self.arm1_params['b1']
+        L_1 = self.arm1_params['L_1']
+
+        J2zz_hat = self.arm2_params['J2zz_hat']
+        b2 = self.arm2_params['b2']
+        m2 = self.arm2_params['m2']
+        l2 = self.arm2_params['l2']
+        J2xx = self.arm2_params['J2xx']
+
+        g = 9.81
+
+        # Build intermediates
+        Jstar = J1zz_hat + m2*(L_1**2) + J2xx
+        delstar = J2zz_hat*Jstar - (m2**2)*(l2**2)*(L_1**2)
+
+        # Build A
+        a32 = (g*(m2**2)*(l2**2)*L_1)/delstar
+        a33 = (-b1*J2zz_hat)/delstar
+        a34 = (-b2*m2*l2*L_1)/delstar
+        a42 = (g*m2*l2*Jstar)/delstar
+        a43 = (-b1*m2*l2*L_1)/delstar
+        a44 = (-b2*Jstar)/delstar
+
+        A = np.array([[0, 0,   1,   0],
+                      [0, 0,   0,   1],
+                      [0, a32, a33, a34],
+                      [0, a42, a43, a44]])
+
+        # Build B (4x1 column, tau1 only)
+        b31 = J2zz_hat/delstar
+        b41 = (m2*l2*L_1)/delstar
+
+        B = np.array([[0.0], [0.0], [b31], [b41]])
+
+        # Return
+        self._A = A
+        self._B = B
+        print(f"A = {A}")
+        print(f"B = {B}")
+        return A, B
+
+    def generate_dlqr_gains(self, Q, R, dt=0.001):
+        self._obtain_linear_statespace_matrices()
+
+        # Q should be 4x4. R should be a scalar (or 1x1)
+        if getattr(self, "_A", None) is None:
+            self.obtain_linear_statespace_matrices()
+
+        Q = np.asarray(Q, dtype=float)
+        R = np.atleast_2d(np.asarray(R, dtype=float))
+
+        Ad, Bd, *_ = cont2discrete((self._A, self._B, np.eye(4), np.zeros((4, 1))), dt, method='zoh')
+        Qd, Rd = Q * dt, R * dt  # Scale by dt
+
+        P = solve_discrete_are(Ad, Bd, Qd, Rd)
+        K = np.linalg.solve(Rd + Bd.T @ P @ Bd, Bd.T @ P @ Ad)
+
+        # Sanity check: closed loop should be stable (all |eig| < 1 in discrete time)
+        eigs = np.linalg.eigvals(Ad - Bd @ K)
+        if np.any(np.abs(eigs) >= 1.0):
+            print(f"WARNING: closed loop unstable, |eig| = {np.abs(eigs)}")
+
+        # Store everything needed for saving
+        self._Ad, self._Bd = Ad, Bd
+        self._dlqr_K = K.ravel()
+        self._dlqr_Q, self._dlqr_R, self._dlqr_dt = Q, R, dt
+
+        # Print results
+        print(f"Discrete LQR gains: K = {self._dlqr_K}")
+        print(f"Closed-loop |eig| = {np.abs(eigs)}")
+        return self._dlqr_K
+
+    def store_lqr_to_configs(self, header_path, name="lqr"):
+        """
+        Saves LQR gains to JSON (config folder) and a C++ header.
+        Control law: tau = -K @ [t1, wrap(t2 - pi), t1d, t2d]
+        """
+        if getattr(self, "_dlqr_K", None) is None:
+            print("Must generate LQR gains to store them")
+            return
+        if self.config_folder is None:
+            print("Must load params (config folder) to store LQR")
+            return
+
+        K = np.asarray(self._dlqr_K).ravel()
+        dt = float(self._dlqr_dt)
+
+        # JSON (for Python scripts)
+        lqr = {
+            "state_order": ["t1", "wrap(t2 - pi)", "t1d", "t2d"],
+            "control_law": "tau = -K @ dx",
+            "dt": dt,
+            "K": K.tolist(),
+            "Q": self._dlqr_Q.tolist(),
+            "R": self._dlqr_R.tolist(),
+            "A": self._A.tolist(),
+            "B": self._B.ravel().tolist(),
+            "Ad": self._Ad.tolist(),
+            "Bd": self._Bd.ravel().tolist(),
+            "arm1_params": {k: float(v) for k, v in self.arm1_params.items() if isinstance(v, (int, float))},
+            "arm2_params": {k: float(v) for k, v in self.arm2_params.items() if isinstance(v, (int, float))},
+        }
+        json_path = Path(self.config_folder) / f"{name}.json"
+        json_path.write_text(json.dumps(lqr, indent=2))
+
+        # HEADER (for CPP scripts)
+        header_path = Path(header_path)
+        header_path.mkdir(parents=True, exist_ok=True)
+        k_str = ", ".join(f"{k:.8e}f" for k in K)
+        q_str = ", ".join(f"{q:.4g}" for q in np.diag(self._dlqr_Q))
+        with open(header_path / f"{name}.hpp", "w") as f:
+            f.write("#pragma once\n\n")
+            f.write("namespace LQRConfig {\n\n")
+            f.write("// Discrete LQR about upright (theta2 = pi)\n")
+            f.write("// tau = -(K[0]*t1 + K[1]*wrap(t2 - pi) + K[2]*t1d + K[3]*t2d)\n")
+            f.write("// NOTE: state order is [t1, t2, t1d, t2d], wrap(t2 - pi) into (-pi, pi]\n")
+            f.write(f"// Designed with Q diag = [{q_str}], R = {self._dlqr_R.item():.4g}\n\n")
+            f.write(f"// And with DT = {dt:.6f}f;\n\n")
+            f.write(f"constexpr float K[4] = {{{k_str}}};\n\n")
+            f.write("} // namespace LQRConfig\n")
+
+        print(f"Wrote {json_path} and {header_path / name}.hpp")
 
     # # ---------------------------------------------------------------------------
     # # Analyzer residuals
@@ -1686,7 +1820,7 @@ if __name__ == "__main__":
     one_example = base_path + "sinetau_nocog_motoronly_001/logs_20260823_211700.pkl"
 
     analyzer = FurataAnalyzer(cog_path, tau_filter_bw=25)
-    analyzer.load_params_from_configs(config_path=config_path, withFs=True)
+    analyzer.load_params_from_configs(config_path=config_path, withFs=False)
     analyzer.add_all_logs(base_path, identifier="all")
     analyzer.parse_runs(doPlot=False, trim = 10)
     #analyzer.plot_raw_all()
@@ -1697,6 +1831,18 @@ if __name__ == "__main__":
     analyzer.store_params_to_configs(header_path=header_path)
     #analyzer.simulate_runs()
 
+    # Generate and save LQR gains
+    tau_max = 1.5               # [N-m]
+    max_t1  = 3.0               # [rad]  arm free to wander
+    max_t2  = np.radians(15)    # [rad]  gives ~1.5 N-m at 15 deg
+    max_t1d = 10.0              # [rad/s]
+    max_t2d = 10.0              # [rad/s]
+
+    Q_to_use = np.diag([1/(max_t1**2), 1/(max_t2**2), 1/(max_t1d**2), 1/(max_t2d**2)])
+    R_to_use = 1/(tau_max**2)
+
+    analyzer.generate_dlqr_gains(Q_to_use, R_to_use)
+    analyzer.store_lqr_to_configs(header_path)
     # # Check residuals
     # analyzer.plot_run_error_horizons(debug=False, save_dir=config_path)
 
@@ -1716,28 +1862,28 @@ if __name__ == "__main__":
     # tester.filter_runs()
     # tester.simulate_runs()
 
-    # Fit residuals on TEST
-    print("~~~Moving to tester")
-    tester = FurataAnalyzer(cog_path, tau_filter_bw=25)
-    tester.load_params_from_configs(config_path=config_path, withFs=True)
-    tester.add_all_logs(base_path, identifier="generated")
-    tester.parse_runs(doPlot=False, trim = 10)
-    tester.filter_runs()
-    #tester.simulate_runs()
+    # # Fit residuals on TEST
+    # print("~~~Moving to tester")
+    # tester = FurataAnalyzer(cog_path, tau_filter_bw=25)
+    # tester.load_params_from_configs(config_path=config_path, withFs=True)
+    # tester.add_all_logs(base_path, identifier="generated")
+    # tester.parse_runs(doPlot=False, trim = 10)
+    # tester.filter_runs()
+    # #tester.simulate_runs()
 
-    common = dict(error_weights=(1.0, 2.3), loss_lsq="linear", use_vel=False, dec=5, lam=1e-4, ftol_lsq=1e-6)
-    for w in [0.3, 0.6, 0.9, 1.0, 1.2, 1.5]:  # Fit to windows of progressive sizes, with warm starts and intermediate saves
-        print(f"\n===== Window {w} s =====")
-        cur_result = tester.fit_residual_model(window_s=w, stride_s=w, **common)
-        print(cur_result)
-        tester.save_residual_model(config_path, header_path=header_path,
-                                   name=f"residual_model_s05to{str(w).replace('.', 'p')}_w23_linear_dt5")
+    # common = dict(error_weights=(1.0, 2.3), loss_lsq="linear", use_vel=False, dec=5, lam=1e-4, ftol_lsq=1e-6)
+    # for w in [0.3, 0.6, 0.9, 1.0, 1.2, 1.5]:  # Fit to windows of progressive sizes, with warm starts and intermediate saves
+    #     print(f"\n===== Window {w} s =====")
+    #     cur_result = tester.fit_residual_model(window_s=w, stride_s=w, **common)
+    #     print(cur_result)
+    #     tester.save_residual_model(config_path, header_path=header_path,
+    #                                name=f"residual_model_s05to{str(w).replace('.', 'p')}_w23_linear_dt5")
     
-    for w in [1.2]:  # Eval fits independently
-        name = f"residual_model_s05to{str(w).replace('.', 'p')}_w23_linear_dt5"
-        tester.load_residual_model(Path(config_path) / f"{name}.pkl")
-        print(f"\n===== Evaluating {name} =====")
-        tester.compare_residual_model(sim_s = w, dec = 5)
+    # for w in [1.2]:  # Eval fits independently
+    #     name = f"residual_model_s05to{str(w).replace('.', 'p')}_w23_linear_dt5"
+    #     tester.load_residual_model(Path(config_path) / f"{name}.pkl")
+    #     print(f"\n===== Evaluating {name} =====")
+    #     tester.compare_residual_model(sim_s = w, dec = 5)
 
     # # ### NONLINEAR FIT ###
     # print("-----Nonlinear (with J1)-----")

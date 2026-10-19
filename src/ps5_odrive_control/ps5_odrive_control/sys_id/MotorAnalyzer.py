@@ -817,7 +817,7 @@ class MotorAnalyzer:
                     f.write(f"constexpr float L_1 = {self.motor_params["L_1"]:.4f};\n\n")
                     f.write("} // namespace Arm1Config\n")
     
-            print(f"Wrote {self.header_path}")
+                print(f"Wrote {self.header_path}")
 
 # ---------------------------------------------------------------------------
 # Fit dat data
