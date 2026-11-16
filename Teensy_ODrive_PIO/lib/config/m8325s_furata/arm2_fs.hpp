@@ -1,6 +1,6 @@
 #pragma once
 
-namespace Arm2Config {
+namespace Arm2FsConfig {
 
 constexpr float J2zz_hat = 0.0002;
 

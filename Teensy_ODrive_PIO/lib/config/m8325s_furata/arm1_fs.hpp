@@ -1,6 +1,6 @@
 #pragma once
 
-namespace Arm1Config {
+namespace Arm1FsConfig {
 
 constexpr float J1zz_hat = 0.0022;
 

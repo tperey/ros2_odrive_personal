@@ -1,4 +1,12 @@
 TODO:
+
+CORE as of 2026-11-06:
+--DEAL WITH THE MF LAG IN YOUR DECOGGED LOGGING! I added a fix but its untested
+--Add in and test friction compensation (likely in the FFWD functinoality)
+--Add in and test Kalman filter
+--Add in and test StateMachine
+--Add in and test LQR controller, potentially using Kalman filter and state machine
+
 Sys ID
 *Most prominent
 --Consider bringing in static friction on pendulum FIT
@@ -6,7 +14,6 @@ Sys ID
 *For pendulum
 --Residuals seem exactly aligned with missing coulomb friction. Try a tanh or constant friction term? WON'T BE ABLE TO USE LQR!
 --Could optimize filter params with linear method to minimize residual? PROB DON'T CARE
---DEAL WITH THE MF LAG IN YOUR DECOGGED LOGGING! I added a fix but its untested
 
 NOTES
 --Odrive values should be in REVS, not RADS as of 2026-08-30
