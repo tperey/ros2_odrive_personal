@@ -1,4 +1,5 @@
 #include "FurataKF.hpp"
+#include <string.h>
 
 // (Kalman filter equations (1)-(7) are listed at the top of FurataKFBase.cpp)
 
@@ -8,12 +9,12 @@
 FurataKF::FurataKF(const FurataParams& params, float dt,
                    const float x0[NX], const float P0[NX][NX],
                    const float Q[NX][NX], const float R[NZ][NZ])
-    : FurataKFBase(params, dt, x0, P0, Q, R)  // base handles params, dt, Q, R, H, x0, P0
+    : FurataKFBase(params, dt, x0, P0, Q, R)  // base construction handles params, dt, Q, R, H, x0, P0
 {
     // By the time we get here the base is fully constructed (_p, _dt are set).
-    // TODO: build the linear model in order:
-    //         _buildContinuousModel();  -> A, B
-    //         _discretize();            -> F, G   (needs A, B, dt)
+    // Now, build the linear model in order:
+    _buildContinuousModel(); // -> A, B
+    _discretize(); // -> F = Ad, G = Bd
 }
 
 // ----------------------------------------------------------------------------
@@ -21,13 +22,18 @@ FurataKF::FurataKF(const FurataParams& params, float dt,
 // ----------------------------------------------------------------------------
 void FurataKF::predict(float tau) {
     // Eq (1) and (2)
-    // TODO: _predictState(tau);
-    // TODO: _propagateCovariance(_F);   (inherited from base)
+    _predictState(tau);
+    _propagateCovariance(_F);   // (inherited from base)
 }
 
 void FurataKF::_predictState(float tau) {
     // Eq (1):  x = F x + G u
-    // TODO: compute into a temp array (don't overwrite _x while still reading it!), then copy back
+    float x_new[NX], Fx[NX];
+
+    _vecmatMul(_F, _x, Fx);
+    for (int i = 0; i < NX; i++) x_new[i] = Fx[i] + tau*_G[i];
+
+    memcpy(_x, x_new, sizeof(x_new));
 }
 
 // ----------------------------------------------------------------------------
@@ -55,8 +61,23 @@ void FurataKF::_buildContinuousModel() {
      * (Also: this A is exactly the Jacobian df_c/dx of _dynamics() evaluated at
      *  x = 0, tau = 0 -- a nice cross-check once the EKF exists.)
      */
-    // TODO: compute Jstar, delstar
-    // TODO: zero _A and _B, then fill in nonzero entries
+    // Compute Jstar, delstar
+    float Jstar = _p.J1zz_hat + _p.m2*_p.L_1*_p.L_1 + _p.J2xx;
+    float delstar = _p.J2zz_hat*Jstar - _p.m2*_p.m2 * _p.l2*_p.l2 * _p.L_1*_p.L_1;
+
+
+    // For _A and _B, then fill in nonzero entries
+    _A[0][2] = 1.0f;
+    _A[1][3] = 1.0f;
+    _A[2][1] = (_p.g * _p.m2*_p.m2 * _p.l2*_p.l2 * _p.L_1)/delstar;
+    _A[2][2] = (-_p.b1 * _p.J2zz_hat)/delstar;
+    _A[2][3] = (-_p.b2 * _p.m2 * _p.l2 * _p.L_1)/delstar;
+    _A[3][1] = (_p.g * _p.m2 * _p.l2 * Jstar)/delstar;
+    _A[3][2] = (-_p.b1 * _p.m2 * _p.l2 * _p.L_1)/delstar;
+    _A[3][3] = (-_p.b2 * Jstar)/delstar;
+
+    _B[2] = _p.J2zz_hat/delstar;
+    _B[3] = _p.m2 * _p.l2 * _p.L_1/delstar;
 }
 
 void FurataKF::_discretize() {
@@ -66,7 +87,6 @@ void FurataKF::_discretize() {
      * Exact (ZOH):   F = expm(A dt),   G = (integral_0^dt expm(A s) ds) B
      *
      * No expm on the Teensy, so truncate the series (dt = 1 ms is small):
-     *   1st order (Euler):  F = I + A dt,                    G = B dt
      *   2nd order:          F = I + A dt + (A dt)^2 / 2,     G = (I dt + A dt^2 / 2) B
      *
      * NOTE: Euler gives G[0] = G[1] = 0 (torque doesn't hit the angles within
@@ -76,5 +96,40 @@ void FurataKF::_discretize() {
      * Alternative: skip this and pass in Ad/Bd computed offline in Python
      *              (like how LQRConfig::K is generated).
      */
-    // TODO: pick an order and compute _F, _G
+
+    // Discretize _A to get _F
+    float Adt[NX][NX], Adt2[NX][NX], Adt2half[NX][NX];
+    for (int i = 0; i < NX; i++) {
+        for (int j = 0; j < NX; j++) {
+            Adt[i][j] = _dt*_A[i][j];
+        }
+    }
+    _matMul(Adt, Adt, Adt2);
+    for (int i = 0; i < NX; i++) {
+        for (int j = 0; j < NX; j++) {
+            Adt2half[i][j] = 0.5f*Adt2[i][j];
+        }
+    }
+
+    float IAdt[NX][NX];
+    float I[NX][NX] = {
+        {1.0, 0.0, 0.0, 0.0},
+        {0.0, 1.0, 0.0, 0.0},
+        {0.0, 0.0, 1.0, 0.0},
+        {0.0, 0.0, 0.0, 1.0},
+    };
+    _matAdd(I, Adt, IAdt);
+    _matAdd(IAdt, Adt2half, _F);
+
+    // Discretize _B and _A to get _G
+    float Idt[NX][NX], Adt22[NX][NX];
+    for (int i = 0; i < NX; i++) {
+        for (int j = 0; j < NX; j++) {
+            Idt[i][j] = _dt*I[i][j];
+            Adt22[i][j] = 0.5f*_dt*_dt*_A[i][j];
+        }
+    }
+    float G_left[NX][NX];
+    _matAdd(Idt, Adt22, G_left);
+    _vecmatMul(G_left, _B, _G);
 }

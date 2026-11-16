@@ -31,10 +31,10 @@ public:
     void predict(float tau) override;
 
 private:
-    float _A[NX][NX];  // continuous-time A
-    float _B[NX];      // continuous-time B (column, single input)
-    float _F[NX][NX];  // discrete-time state transition  (Ad)
-    float _G[NX];      // discrete-time input matrix      (Bd)
+    float _A[NX][NX]{};  // continuous-time A
+    float _B[NX]{};      // continuous-time B (column, single input)
+    float _F[NX][NX];    // discrete-time state transition  (Ad)
+    float _G[NX];        // discrete-time input matrix      (Bd)
 
     // Called once from the constructor (non-virtual, so safe there)
     void _buildContinuousModel();  // fills _A, _B from _p

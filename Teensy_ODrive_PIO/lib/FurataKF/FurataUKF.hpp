@@ -11,16 +11,16 @@
  * Same state / measurement / getters / update as every FurataKFBase filter.
  * The ONLY difference is predict():
  *
- *   EKF: linearize f (Jacobian F), push the covariance through F P F^T.
  *   UKF: pick 2*NX+1 "sigma points" spread around x_hat according to P,
  *        push EACH through the true nonlinear f, then recompute the mean
- *        and covariance from where they land. No Jacobians at all.
+ *        and covariance estimate from where they land. No Jacobians at all.
+ *        Pass this estimate through the standard update step.
  *
  * DISCRETE MODEL:
  *      x[k+1] = f(x[k], u[k]) + w,    w ~ N(0, Q)     f = _propagate() (RK4 of _dynamics())
  *      z[k]   = H x[k] + v,           v ~ N(0, R)     H linear -> update is inherited as-is
  *
- * Why the update can be inherited: with a LINEAR h(x) = H x, the UKF's
+ * Why the update can be inherited: with a LINEAR measurement h(x) = H x, the UKF's
  * sigma-point measurement update gives exactly the standard KF update
  * (Eq (3)-(7)). If you ever add a nonlinear measurement, override update().
  * (Formulas for that are in FurataUKF.cpp for reference.)
@@ -35,7 +35,7 @@
  */
 class FurataUKF : public FurataKFBase {
 public:
-    static constexpr int NSIG = 2 * NX + 1;  // # sigma points (9)
+    static constexpr int N_SIGMA = 2 * NX + 1;  // # sigma points (9)
 
     FurataUKF(const FurataParams& params, float dt,
               const float x0[NX], const float P0[NX][NX],
@@ -49,12 +49,12 @@ private:
     // ---- Unscented transform params ----
     float _alpha, _beta, _kappa;
     float _lambda;       // = alpha^2 (NX + kappa) - NX
-    float _Wm[NSIG];     // weights for the MEAN
-    float _Wc[NSIG];     // weights for the COVARIANCE
+    float _Wm[N_SIGMA];     // weights for the MEAN
+    float _Wc[N_SIGMA];     // weights for the COVARIANCE
 
     // ---- Sigma points (members to keep them off the stack; also handy to inspect) ----
-    float _sigma[NSIG][NX];      // X_i     : sigma points around x_hat[k-1|k-1]
-    float _sigmaProp[NSIG][NX];  // X_i^-   : after f(X_i, u)
+    float _sigma[N_SIGMA][NX];      // X_i     : sigma points around x_hat[k-1|k-1]
+    float _sigmaProp[N_SIGMA][NX];  // X_i^-   : after f(X_i, u)
 
     // ---- Setup (called once from constructor) ----
     void _computeWeights();      // fills _lambda, _Wm, _Wc
