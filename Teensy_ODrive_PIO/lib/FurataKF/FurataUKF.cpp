@@ -85,8 +85,8 @@ void FurataUKF::predict(float tau) {
         memcpy(_x, x_next, sizeof(x_next));
 
         float Pnew[NX][NX];
-        _matAdd(_P, _Q, Pnew);
-        memcpy(_P, Pnew, sizeof(Pnew));
+        _matAdd(_Pcov, _Q, Pnew);
+        memcpy(_Pcov, Pnew, sizeof(Pnew));
     }
   
 }
@@ -96,11 +96,11 @@ void FurataUKF::predict(float tau) {
 // ----------------------------------------------------------------------------
 bool FurataUKF::_generateSigmaPoints() {
     // (U1)
-    // Build M = (NX + _lambda) * _P
+    // Build M = (NX + _lambda) * _Pcov
     float M[NX][NX];
     for (int i = 0; i < NX; i++) {
         for (int j = 0; j < NX; j++) {
-            M[i][j] = (NX + _lambda) * _P[i][j];
+            M[i][j] = (NX + _lambda) * _Pcov[i][j];
         }
     }
 
@@ -168,7 +168,7 @@ void FurataUKF::_computePredictedMean() {
 }
 
 void FurataUKF::_computePredictedCovariance() {
-    // (U4) _P = sum_i _Wc[i] * d_i d_i^T + _Q,   d_i = _sigmaProp[i] - _x
+    // (U4) _Pcov = sum_i _Wc[i] * d_i d_i^T + _Q,   d_i = _sigmaProp[i] - _x
     float sum_matrix[NX][NX]{};
     for (int i = 0; i < N_SIGMA; i++) {
 
@@ -189,11 +189,11 @@ void FurataUKF::_computePredictedCovariance() {
         }
     }
 
-    // Add _Q and update _P
+    // Add _Q and update _Pcov
     float Pnew[NX][NX];
     _matAdd(sum_matrix, _Q, Pnew);
-    memcpy(_P, Pnew, sizeof(Pnew));
-    _symmetrize(_P); // Wc_0 can be negative, so float error matters here
+    memcpy(_Pcov, Pnew, sizeof(Pnew));
+    _symmetrize(_Pcov); // Wc_0 can be negative, so float error matters here
 }
 
 // ----------------------------------------------------------------------------

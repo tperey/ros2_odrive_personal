@@ -32,13 +32,13 @@ public:
 
 private:
     float _A[NX][NX]{};  // continuous-time A
-    float _B[NX]{};      // continuous-time B (column, single input)
+    float _Bc[NX]{};      // continuous-time B (column, single input)
     float _F[NX][NX];    // discrete-time state transition  (Ad)
     float _G[NX];        // discrete-time input matrix      (Bd)
 
     // Called once from the constructor (non-virtual, so safe there)
-    void _buildContinuousModel();  // fills _A, _B from _p
-    void _discretize();            // fills _F, _G from _A, _B, _dt
+    void _buildContinuousModel();  // fills _A, _Bc from _p
+    void _discretize();            // fills _F, _G from _A, _Bc, _dt
 
     void _predictState(float tau); // x = F x + G u
 };

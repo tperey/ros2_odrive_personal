@@ -131,7 +131,7 @@ protected:
 
     // ---- Estimate ----
     float _x[NX];       // x_hat
-    float _P[NX][NX];   // P
+    float _Pcov[NX][NX];   // P
 
     // ---- Shared predict helper (KF + EKF) ----
     // Eq (2): P = F P F^T + Q, for whatever F the caller hands in

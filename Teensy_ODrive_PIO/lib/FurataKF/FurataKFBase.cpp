@@ -1,6 +1,7 @@
 #include "FurataKFBase.hpp"
 #include <math.h>
 #include <string.h>
+#include <stdint.h>
 
 /*
  * ===================== DISCRETE KALMAN FILTER CHEAT SHEET =====================
@@ -79,7 +80,7 @@ void FurataKFBase::step(float tau, float t1_meas, float t2_meas) {
 
 void FurataKFBase::reset(const float x0[NX], const float P0[NX][NX]) {
     memcpy(_x, x0, sizeof(_x));
-    memcpy(_P, P0, sizeof(_P));
+    memcpy(_Pcov, P0, sizeof(_Pcov));
 }
 
 // ----------------------------------------------------------------------------
@@ -95,15 +96,15 @@ void FurataKFBase::_propagateCovariance(const float F[NX][NX]) {
     float Ft[NX][NX];
     _transpose(Floc, Ft);
     float PFt[NX][NX];
-    _matMul(_P, Ft, PFt);
+    _matMul(_Pcov, Ft, PFt);
     float FPFt[NX][NX];
     _matMul(Floc, PFt, FPFt);
 
     // Generate new result, and store
     float Pnew[NX][NX];
     _matAdd(FPFt, _Q, Pnew);
-    memcpy(_P, Pnew, sizeof(_P));
-    _symmetrize(_P);
+    memcpy(_Pcov, Pnew, sizeof(_Pcov));
+    _symmetrize(_Pcov);
 }
 
 // ----------------------------------------------------------------------------
@@ -217,7 +218,7 @@ void FurataKFBase::_computeInnovationCov(float S[NZ][NZ]) {
     // Note: with H = [I2 0], H P H^T is just the top-left 2x2 block of P.
     for (uint8_t i = 0; i < NZ; i++) {
         for (uint8_t j = 0; j < NZ; j++) {
-            S[i][j] = _P[i][j] + _R[i][j];
+            S[i][j] = _Pcov[i][j] + _R[i][j];
         }
     }    
 }
@@ -232,7 +233,7 @@ bool FurataKFBase::_computeGain(const float S[NZ][NZ], float K[NX][NZ]) {
         float PHt[NX][NZ];
         for (int i = 0; i < NX; i++) {
             for (int j = 0; j < NZ; j++) {
-                PHt[i][j] = _P[i][j];
+                PHt[i][j] = _Pcov[i][j];
             }
         }
 
@@ -291,15 +292,15 @@ void FurataKFBase::_updateCovariance(const float K[NX][NZ]) {
 
     // Left term
     float Pit[NX][NX];
-    _matMul(_P, ImKHt, Pit);
+    _matMul(_Pcov, ImKHt, Pit);
     float iPit[NX][NX];
     _matMul(ImKH, Pit, iPit);
 
     // Generate new result, copy over, and clean
     float Pnew[NX][NX];
     _matAdd(iPit, KRKt, Pnew);
-    memcpy(_P, Pnew, sizeof(_P));
-    _symmetrize(_P);
+    memcpy(_Pcov, Pnew, sizeof(_Pcov));
+    _symmetrize(_Pcov);
 }
 
 // ----------------------------------------------------------------------------
@@ -352,5 +353,5 @@ void FurataKFBase::getState(float out[NX]) const {
 }
 
 void FurataKFBase::getCovariance(float out[NX][NX]) const {
-    memcpy(out, _P, sizeof(_P));
+    memcpy(out, _Pcov, sizeof(_Pcov));
 }

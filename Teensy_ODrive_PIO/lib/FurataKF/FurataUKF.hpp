@@ -60,10 +60,10 @@ private:
     void _computeWeights();      // fills _lambda, _Wm, _Wc
 
     // ---- Predict helpers ----
-    bool _generateSigmaPoints();             // (U1) from _x, _P. false if Cholesky fails
+    bool _generateSigmaPoints();             // (U1) from _x, _Pcov. false if Cholesky fails
     void _propagateSigmaPoints(float tau);   // (U2) _sigmaProp[i] = f(_sigma[i], tau)
     void _computePredictedMean();            // (U3) _x = sum Wm_i X_i^-
-    void _computePredictedCovariance();      // (U4) _P = sum Wc_i (X_i^- - x)(X_i^- - x)^T + Q
+    void _computePredictedCovariance();      // (U4) _Pcov = sum Wc_i (X_i^- - x)(X_i^- - x)^T + Q
 
     // ---- Math helper ----
     // Lower-triangular L with L L^T = M. false if M isn't positive definite.

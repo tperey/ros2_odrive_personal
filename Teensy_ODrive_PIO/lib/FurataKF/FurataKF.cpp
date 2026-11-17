@@ -66,7 +66,7 @@ void FurataKF::_buildContinuousModel() {
     float delstar = _p.J2zz_hat*Jstar - _p.m2*_p.m2 * _p.l2*_p.l2 * _p.L_1*_p.L_1;
 
 
-    // For _A and _B, then fill in nonzero entries
+    // For _A and _Bc, then fill in nonzero entries
     _A[0][2] = 1.0f;
     _A[1][3] = 1.0f;
     _A[2][1] = (_p.g * _p.m2*_p.m2 * _p.l2*_p.l2 * _p.L_1)/delstar;
@@ -76,8 +76,8 @@ void FurataKF::_buildContinuousModel() {
     _A[3][2] = (-_p.b1 * _p.m2 * _p.l2 * _p.L_1)/delstar;
     _A[3][3] = (-_p.b2 * Jstar)/delstar;
 
-    _B[2] = _p.J2zz_hat/delstar;
-    _B[3] = _p.m2 * _p.l2 * _p.L_1/delstar;
+    _Bc[2] = _p.J2zz_hat/delstar;
+    _Bc[3] = _p.m2 * _p.l2 * _p.L_1/delstar;
 }
 
 void FurataKF::_discretize() {
@@ -121,7 +121,7 @@ void FurataKF::_discretize() {
     _matAdd(I, Adt, IAdt);
     _matAdd(IAdt, Adt2half, _F);
 
-    // Discretize _B and _A to get _G
+    // Discretize _Bc and _A to get _G
     float Idt[NX][NX], Adt22[NX][NX];
     for (int i = 0; i < NX; i++) {
         for (int j = 0; j < NX; j++) {
@@ -131,5 +131,5 @@ void FurataKF::_discretize() {
     }
     float G_left[NX][NX];
     _matAdd(Idt, Adt22, G_left);
-    _vecmatMul(G_left, _B, _G);
+    _vecmatMul(G_left, _Bc, _G);
 }
