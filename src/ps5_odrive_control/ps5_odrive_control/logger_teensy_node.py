@@ -24,6 +24,7 @@ TEENSY_PID = 0x0483
 # Expect [0xAA] [0x55] [t] [pos] [vel] [iq_set] [iq_measured] [tau_target] [tau_actual] [cmd] {[pend pos] [pend vel] [pend acc]} [checksum]
 PACKET_BASE = 35  # SINGLE_TEL_PCKT_SIZE
 PACKET_PEND = 47
+PACKET_FULL = 45
 
 BUF_SIZE_WARNING = 525  # Behind by 3x cycles of 5 packets (of 35 bits)
 
@@ -37,14 +38,18 @@ class LoggerNode(Node):
                  log_path='logs',
                  logTime = False,
                  inclPendulum = False,
+                 fullFurata = False,
                  saveLog = False):
         super().__init__("logger")
 
         # Pendulum
         self._packet_size = PACKET_BASE
         self._incl_pendulum = inclPendulum
+        self._fullFurata = fullFurata
         if self._incl_pendulum:
             self._packet_size = PACKET_PEND
+        if self._fullFurata:
+            self._packet_size = PACKET_FULL
 
         # Ros
         self.publisher = self.create_publisher(MotorSingleTelemetry, topic, 10)
@@ -99,6 +104,8 @@ class LoggerNode(Node):
             'pend_pos': [],
             'pend_vel': [],
             'pend_acc': [],
+            'sm_state': [],
+            'sm_fault': [],
         }
 
         self._logTime = logTime
@@ -165,21 +172,37 @@ class LoggerNode(Node):
 
                 # Extract (protocol dependent)
                 t_ms_bits = self._buf[2:6] 
-                pos_bits = self._buf[6:10]
-                vel_bits = self._buf[10:14]
-                iq_set_bits = self._buf[14:18]
-                iq_act_bits = self._buf[18:22]
-                tau_set_bits = self._buf[22:26]
-                tau_act_bits = self._buf[26:30]
-                cmd_bits = self._buf[30:34]
-                if self._incl_pendulum:
-                    pend_pos_bits = self._buf[34:38]
-                    pend_vel_bits = self._buf[38:42]
-                    pend_acc_bits = self._buf[42:46]
-                else:
-                    pend_pos_bits = bytearray(4)
-                    pend_vel_bits = bytearray(4)
+                if self._fullFurata:
+                    sm_state_bits = self._buf[6:7]
+                    sm_fault_bits = self._buf[7:8]
+                    cmd_bits = self._buf[8:12]
+                    pos_bits = self._buf[12:16]
+                    pend_pos_bits = self._buf[16:20]
+                    vel_bits = self._buf[20:24]
+                    pend_vel_bits = self._buf[24:28]
+                    iq_set_bits = self._buf[28:32]
+                    iq_act_bits = self._buf[32:36]
+                    tau_set_bits = self._buf[36:40]
+                    tau_act_bits = self._buf[40:44]
                     pend_acc_bits = bytearray(4)
+                else: 
+                    sm_state_bits = bytearray(1)
+                    sm_fault_bits = bytearray(1)
+                    pos_bits = self._buf[6:10]
+                    vel_bits = self._buf[10:14]
+                    iq_set_bits = self._buf[14:18]
+                    iq_act_bits = self._buf[18:22]
+                    tau_set_bits = self._buf[22:26]
+                    tau_act_bits = self._buf[26:30]
+                    cmd_bits = self._buf[30:34]
+                    if self._incl_pendulum:
+                        pend_pos_bits = self._buf[34:38]
+                        pend_vel_bits = self._buf[38:42]
+                        pend_acc_bits = self._buf[42:46]
+                    else:
+                        pend_pos_bits = bytearray(4)
+                        pend_vel_bits = bytearray(4)
+                        pend_acc_bits = bytearray(4)
 
                 # Convert payload from bits
                 t_ms = int.from_bytes(t_ms_bits, byteorder='little', signed=False)
@@ -193,13 +216,16 @@ class LoggerNode(Node):
                 pend_pos = struct.unpack('<f', pend_pos_bits)[0]
                 pend_vel = struct.unpack('<f', pend_vel_bits)[0]
                 pend_acc = struct.unpack('<f', pend_acc_bits)[0]
+                sm_state = int.from_bytes(sm_state_bits, byteorder='little', signed=False)
+                sm_fault = int.from_bytes(sm_fault_bits, byteorder='little', signed=False)
 
                 # Compute checksum
                 checksum = self._buf[self._packet_size-1]
                 cs_calc = (0xAA + 0x55 + sum(t_ms_bits) + sum(pos_bits) + sum(vel_bits) + 
                             sum(iq_set_bits) + sum(iq_act_bits) + sum(tau_set_bits) + 
                             sum(tau_act_bits) + sum(cmd_bits) +
-                            sum(pend_pos_bits) + sum(pend_vel_bits) + sum(pend_acc_bits)) & 0xFF
+                            sum(pend_pos_bits) + sum(pend_vel_bits) + sum(pend_acc_bits) +
+                            sum(sm_state_bits) + sum(sm_fault_bits)) & 0xFF
                 if cs_calc != checksum:
                     self.get_logger().warn("+++Checksum mismatch, discarding packet")
                     self._buf = self._buf[1:]  # discard first byte and retry
@@ -208,7 +234,8 @@ class LoggerNode(Node):
                 self._buf = self._buf[self._packet_size:]  # Remove packet we just processed
 
                 # Update latest
-                cur_telemetry = [t_ms, pos, vel, iq_set, iq_act, tau_set, tau_act, cmd, pend_pos, pend_vel, pend_acc]
+                cur_telemetry = [t_ms, pos, vel, iq_set, iq_act, tau_set, tau_act, cmd,
+                                 pend_pos, pend_vel, pend_acc, sm_state, sm_fault]
                 with self.lock:
                     self.latest_telemetry = cur_telemetry
 
@@ -384,6 +411,7 @@ def main(args=None):
     parser = argparse.ArgumentParser()
     parser.add_argument('--pend', action='store_true', help='Include pendulum data in packet')
     parser.add_argument('--save_log', action='store_true', help='Save log as pngs and pkl.')
+    parser.add_argument('--full', action='store_true', help='Indicate full Furata telemetry with kf (no accel).')
     parsed, _ = parser.parse_known_args()  # parse_known_args avoids clashing with ROS args
 
     node = LoggerNode(
@@ -391,6 +419,7 @@ def main(args=None):
         topic='telemetry_teensy',
         logTime=True,
         inclPendulum=parsed.pend,
+        fullFurata = parsed.full,
         saveLog=parsed.save_log
     )
 

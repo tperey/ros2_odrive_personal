@@ -307,7 +307,7 @@ void FurataKFBase::_updateCovariance(const float K[NX][NZ]) {
 // Math helpers
 // ----------------------------------------------------------------------------
 float FurataKFBase::_wrapPi(float a) {
-    // Wrap into (-pi, pi]. Uses atan2 of sin/cos, which maps angle into this ragne
+    // Wrap into (-pi, pi]. Uses atan2 of sin/cos, which maps angle into this range
     return atan2f(sinf(a), cosf(a));
 }
 

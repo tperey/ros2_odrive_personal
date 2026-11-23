@@ -48,7 +48,7 @@ void onHeartbeat(Heartbeat_msg_t& msg, void* user_data) {
   ODriveUserData* odrv_user_data = static_cast<ODriveUserData*>(user_data);
   odrv_user_data->last_heartbeat = msg;
   odrv_user_data->received_heartbeat = true;
-  // TODO (state machine): odrv_user_data->last_heartbeat_ms = millis();
+  odrv_user_data->last_heartbeat_ms = millis();  // For State Machine
 }
 
 void onFeedback(Get_Encoder_Estimates_msg_t& msg, void* user_data) {
@@ -966,10 +966,6 @@ bool perform_linear_position_sid(OdriveLinearPositionSID cur_lp_sid) {
 /* CONTROL */
 
 float command_odrv0_torque(float tau_setpoint, bool poll) {
-  // TODO (state machine): wrap the poll_telemetry() below in `if (poll)`.
-  // The SM polls once in _sense(); polling again here doubles CAN traffic per tick.
-  (void)poll;
-
   // Set control mode on first call
   static bool is_first = true;
   if (is_first) {
@@ -977,8 +973,10 @@ float command_odrv0_torque(float tau_setpoint, bool poll) {
     is_first = false;
   }
 
-  // Need updated telemetry for control laws
-  poll_telemetry();
+  // Need updated telemetry for feedforward, if not already obtained
+  if (poll) {
+    poll_telemetry();
+  }
 
   // Check for feedforward
   float tau_to_set = tau_setpoint;
@@ -1008,62 +1006,54 @@ float command_odrv0_torque(float tau_setpoint, bool poll) {
 /* ================================================================== */
 
 void request_motor_idle_nonblocking() {
-  // TODO: send ONE setState(AXIS_STATE_IDLE) and return. No waiting, no clearErrors()
-  // (we want the axis error to stay visible while in FAULT).
-  //   odrv0.setState(ODriveAxisState::AXIS_STATE_IDLE);
+  // Send ONE setState(AXIS_STATE_IDLE) and return. No waiting, no clearErrors()
+  // For setting motor to IDLE after entering FAULT state.
+  // No need to block while we wait since cmd = 0, and 
+  // we want the axis error to stay visible while in FAULT.
+  odrv0.setState(ODriveAxisState::AXIS_STATE_IDLE);
 }
 
-bool get_odrv0_feedback(OdriveFeedback& out) {
-  // TODO: convert the cached feedback (filled by poll_telemetry()) into the telemetry frame.
-  //   static OdriveFeedback last;                        // ZOH between fresh samples
-  //   last.fresh = odrv0_user_data.received_feedback;
-  //   if (last.fresh) {
-  //     last.pos_rad = -TWO_PI * odrv0_user_data.last_feedback.Pos_Estimate;  // turns -> rad, flip sign
-  //     last.vel_rad = -TWO_PI * odrv0_user_data.last_feedback.Vel_Estimate;
-  //     odrv0_user_data.received_feedback = false;      // this is the ONLY place that clears it
-  //   }
-  //   out = last;
-  //   return last.fresh;
-  //
+bool convert_current_odrv0_feedback(OdriveFeedback& out) {
+  // Convert the cached feedback (filled by poll_telemetry()) into the telemetry frame and units.
+  // Handles ZOH between fresh samples, and actually USES telemetry, so it should decide staleness
+  static OdriveFeedback last;                        // ZOH between fresh samples
+  last.fresh = odrv0_user_data.received_feedback;
+  if (last.fresh) {
+    last.pos_rad = -TWO_PI * odrv0_user_data.last_feedback.Pos_Estimate;  // turns rev -> rad, flip sign
+    last.vel_rad = -TWO_PI * odrv0_user_data.last_feedback.Vel_Estimate;
+    odrv0_user_data.received_feedback = false;      // this is the ONLY place that clears it
+  }
+  out = last;
+  return last.fresh;
+  
   // NOTE: the old sendTelemetry_* functions also clear received_feedback. Don't mix them
   // with this in the same loop.
-  out = OdriveFeedback{};
-  return false;
 }
 
-void get_odrv0_health(OdriveHealth& out) {
-  // TODO:
-  //   out.axis_error         = odrv0_user_data.last_heartbeat.Axis_Error;
-  //   out.axis_state         = odrv0_user_data.last_heartbeat.Axis_State;
-  //   out.ms_since_heartbeat = millis() - odrv0_user_data.last_heartbeat_ms;
-  //
-  // Requires the last_heartbeat_ms TODO in onHeartbeat(). Heartbeats are only handled when
-  // CAN events get pumped -- odrv0.request() inside poll_telemetry() does that every tick.
-  out = OdriveHealth{};
+void read_current_odrv0_health(OdriveHealth& out) {
+  // Convert odrv_user_data to heartbeat/health info
+  out.axis_error         = odrv0_user_data.last_heartbeat.Axis_Error;
+  out.axis_state         = odrv0_user_data.last_heartbeat.Axis_State;
+  out.ms_since_heartbeat = millis() - odrv0_user_data.last_heartbeat_ms;
 }
 
 void sendTelemetry_furata(const FurataTelemetry& tel) {
-  // TODO: build and write one FURATA_TEL_PKCT_SIZE packet. Do NOT poll and do NOT
+  // BUILD and write one FURATA_TEL_PKCT_SIZE packet. Do NOT poll and do NOT
   // touch the received_* flags -- read the cached last_* values (the SM polled this tick).
   //
   //   byte | field                                  | source
   //   -----+----------------------------------------+------------------------------
   //    0-1 | 0xAA 0x55                              | header
   //    2-5 | t_ms (uint32)                          | millis()
-  //      6 | state (uint8)                          | tel.state
-  //      7 | fault (uint8)                          | tel.fault
+  //      6 | state (uint8)                          | tel.state. State from SM
+  //      7 | sm_fault (uint8)                       | tel.sm_fault. Fault from SM
   //   8-11 | tau_cmd                                | tel.tau_cmd
-  //  12-15 | tau_sent                               | tel.tau_sent
-  //  16-19 | t1_meas                                | tel.t1_meas
-  //  20-23 | t2_meas                                | tel.t2_meas
-  //  24-39 | x_hat[0..3]                            | tel.x_hat
-  //  40-43 | odrv pos  [turns, flipped]             | -last_feedback.Pos_Estimate
-  //  44-47 | odrv vel  [turns/s, flipped]           | -last_feedback.Vel_Estimate
-  //  48-51 | Iq_Setpoint                            | last_currents.Iq_Setpoint
-  //  52-55 | Iq_Measured                            | last_currents.Iq_Measured
-  //  56-59 | Torque_Target [flipped, incl. anticog] | -last_torques.Torque_Target
-  //  60-63 | Torque_Estimate [flipped]              | -last_torques.Torque_Estimate
-  //     64 | checksum = sum(bytes 0..63) mod 256    |
+  //  12-27 | x_hat[0..3]                            | tel.x_hat (pos's and vel's)
+  //  28-31 | Iq_Setpoint                            | last_currents.Iq_Setpoint
+  //  32-35 | Iq_Measured                            | last_currents.Iq_Measured
+  //  36-39 | Torque_Target [flipped, incl. ffwd   ] | -last_torques.Torque_Target
+  //  40-43 | Torque_Estimate [flipped]              | -last_torques.Torque_Estimate
+  //     44 | checksum = sum(bytes) mod 256          |
   //
   //   uint8_t packet[FURATA_TEL_PKCT_SIZE];
   //   ... memcpy each field like sendTelemetry_singleODCW_pendulum ...
@@ -1071,5 +1061,39 @@ void sendTelemetry_furata(const FurataTelemetry& tel) {
   //
   // PC side: add a parser for this 65-byte packet. Same header as the old packets, so
   // dispatch on expected length / run type.
-  (void)tel;
+
+  // Get most recent Current/Torque telemetry (since this not produced by KF)
+  // ZOH if nothing (handled by not clearing the stored telemetry values)
+  uint32_t t_ms = millis();
+  float cur_Iq_Setpoint = odrv0_user_data.last_currents.Iq_Setpoint;
+  float cur_Iq_Measured = odrv0_user_data.last_currents.Iq_Measured;
+  float cur_Tau_Target =  -1*odrv0_user_data.last_torques.Torque_Target;
+  float cur_Tau_Estimate = -1*odrv0_user_data.last_torques.Torque_Estimate;
+  // Flip ODrive frame of reference sign (except for currents, which are already reverse)
+
+  // Build packet
+  uint8_t packet[FURATA_TEL_PKCT_SIZE];
+
+  packet[0] = 0xAA;  // Start bits
+  packet[1] = 0x55;
+
+  memcpy(&packet[2], &t_ms, 4);  // Time
+
+  memcpy(&packet[6], &tel.state, 1); // SM state
+  memcpy(&packet[7], &tel.sm_fault, 1); // SM fault
+
+  memcpy(&packet[8], &tel.tau_cmd, 4); // CMD'd torque (pre feedfwd and clipping)
+
+  memcpy(&packet[12], &tel.x_hat, 16); // State estimate
+
+  memcpy(&packet[28], &cur_Iq_Setpoint, 4); // Most recent reported currents/torques
+  memcpy(&packet[32], &cur_Iq_Measured, 4);
+  memcpy(&packet[36], &cur_Tau_Target, 4);
+  memcpy(&packet[40], &cur_Tau_Estimate, 4);
+
+  uint8_t checksum = 0; // Simple checksum = sum of previous bytes modulo 256
+  for (int i = 0; i < (FURATA_TEL_PKCT_SIZE-1); i++) checksum += packet[i];
+  packet[(FURATA_TEL_PKCT_SIZE-1)] = checksum;
+
+  Serial.write(packet, FURATA_TEL_PKCT_SIZE);  // Send packet
 }

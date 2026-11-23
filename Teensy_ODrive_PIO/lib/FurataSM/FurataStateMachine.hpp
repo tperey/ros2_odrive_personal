@@ -67,6 +67,8 @@ enum class State : uint8_t {
  *   DROP     _events is cleared at the start of the next tick. Anything not
  *            acted on is discarded.
  *
+ * _event queue is represented as a SET (bitmask), i.e. a uint with bits set
+ * corresponding to events
  * WHY A SET (bitmask), NOT AN ORDERED QUEUE
  *   Everything posted in one tick happened "at the same time" at 1 ms
  *   resolution. Their order is just the order of the ifs in _collectEvents(),

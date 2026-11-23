@@ -193,14 +193,13 @@ void FurataStateMachine::_sendTelemetry() {
 /* ===================================================================== */
 
 void FurataStateMachine::_post(Event e) {
-    // TODO: _events |= (1u << static_cast<uint8_t>(e));
-    (void)e;
+    // Set the _events bit corresponding to the event
+    _events |= (1u << static_cast<uint8_t>(e));
 }
 
 bool FurataStateMachine::_has(Event e) const {
-    // TODO: return (_events >> static_cast<uint8_t>(e)) & 1u;
-    (void)e;
-    return false;
+    // Check if bit correspoing to event is set in _events
+    return (_events >> static_cast<uint8_t>(e)) & 1u;
 }
 
 void FurataStateMachine::_readSerialCommands() {
@@ -238,14 +237,18 @@ void FurataStateMachine::_seedFilterFromMeasurements() {
 }
 
 bool FurataStateMachine::_motorArmed(State s) const {
-    // TODO: return true for states that command torque (SWING_UP, BALANCE).
-    (void)s;
-    return false;
+    // return true for states that command torque (SWING_UP, BALANCE).
+    // Note motor will ignore cmds when not in closed loop control.
+    // Intent is mostly to ensure _tauSent reflects this.
+
+    // Commandable states are {SWING_UP, BALANCE}
+    return (s == State::SWING_UP) || (s == State::BALANCE);
 }
 
 uint32_t FurataStateMachine::_timeInStateMs() const {
-    // TODO: return millis() - _stateEntryMs;   (unsigned subtraction handles wrap)
-    return 0;
+    // unsigned subtraction handles wrap
+    // Times tracked in ms.
+    return millis() - _stateEntryMs;
 }
 
 /* ===================================================================== */
@@ -273,16 +276,20 @@ float FurataStateMachine::_swingUpTorque(const float x[NX]) const {
 }
 
 /* ===================================================================== */
-/*  MATH                                                                 */
+/*  MATH HELPER                                                          */
 /* ===================================================================== */
 
 float FurataStateMachine::_saturate(float v, float lim) {
-    // TODO: clamp v into [-lim, lim]
-    (void)lim;
+    if (v < -lim) {
+        v = -lim;
+    } else if (v > lim) {
+        v = lim;
+    }
+
     return v;
 }
 
 float FurataStateMachine::_wrapPi(float a) {
-    // TODO: wrap into (-pi, pi]. Same as FurataKFBase::_wrapPi (protected there).
-    return a;
+    // Wrap into (-pi, pi]. Uses atan2 of sin/cos, which maps angle into this ragne
+    return atan2f(sinf(a), cosf(a));
 }

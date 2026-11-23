@@ -84,7 +84,7 @@ float command_odrv0_torque(float tau_setpoint, bool poll = true);
 /* Plain-float interface: this module never includes a KF header.     */
 /* ================================================================== */
 
-// Already existed in the .cpp, now public. BOTH BLOCK (>=150 ms, wait on heartbeat).
+// BLOCKING (>=150 ms, wait on heartbeat).
 void start_motor_single();   // -> CLOSED_LOOP_CONTROL
 void stop_motor_single();    // -> IDLE. Loops forever if the ODrive is dead!
 void poll_telemetry();       // request feedback / Iq / torques (3 blocking requests, 10 ms timeout each)
@@ -99,27 +99,25 @@ struct OdriveFeedback {
     bool  fresh   = false; // true if new since last call (else ZOH of last value)
 };
 // The ONLY consumer of received_feedback. Telemetry reads cached values, never the flag.
-bool get_odrv0_feedback(OdriveFeedback& out);
+// Does NOT update/poll feedback. Simply returns values.
+bool convert_current_odrv0_feedback(OdriveFeedback& out);
 
 struct OdriveHealth {
     uint32_t axis_error         = 0;  // from heartbeat, 0 = OK
     uint8_t  axis_state         = 0;  // ODriveAxisState
     uint32_t ms_since_heartbeat = 0;
 };
-void get_odrv0_health(OdriveHealth& out);
+void read_current_odrv0_health(OdriveHealth& out);
 
 // SM-side telemetry. sendTelemetry_furata appends the ODrive-side fields itself.
 struct FurataTelemetry {
     uint8_t state    = 0;      // State enum
-    uint8_t fault    = 0;      // FaultCode enum
+    uint8_t sm_fault    = 0;      // FaultCode enum
     float   tau_cmd  = 0.0f;   // [N-m] asked for by the active state
-    float   tau_sent = 0.0f;   // [N-m] after saturation / arming (pre-anticog)
-    float   t1_meas  = 0.0f;   // [rad]
-    float   t2_meas  = 0.0f;   // [rad] raw, 0 = hanging
     float   x_hat[4] = {};     // [t1, dt2, t1d, t2d]
 };
-// 2 header + 4 t_ms + 1 state + 1 fault + 14 floats * 4 + 1 checksum
-#define FURATA_TEL_PKCT_SIZE 65
+// 2 header + 4 t_ms + 1 state + 1 fault + 9 floats * 4 + 1 checksum
+#define FURATA_TEL_PKCT_SIZE 45
 void sendTelemetry_furata(const FurataTelemetry& tel);
 
 #endif
