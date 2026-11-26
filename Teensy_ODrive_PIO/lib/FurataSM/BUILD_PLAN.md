@@ -52,35 +52,34 @@ without any state machine logic in the way.
 > `FURATA_TEL_PKCT_SIZE` and the logger). Tuning Q/R without the measurements is guesswork, and
 > logging `(tau, t1, t2)` lets you replay the UKF offline in Python instead of reflashing.
 
-### 2.5a — Implement friction comp in `command_odrv0_torque`
+### 2.5a — Implement friction comp in `command_odrv0_torque` ✅ DONE
 
-`doAntifriction`, `friction_offset`, `percent_antifriction` are already set by
-`load_anticogging_config`, but **never applied**. Add the friction term next to the anticog term.
+Implemented as `fric_comp(tau_cmd, vel_revs)` in `OdriveCANWrapper.cpp`, called from
+`command_odrv0_torque` when `doAntifriction`. Returns the compensation only (added like the anticog
+term). Config: `load_friction_comp(FrictionCompParams)`, values in
+`lib/config/m8325s_furata/friction_comp.hpp` (`fs` from `Arm1FsConfig::fs1`). The old friction
+arguments of `load_anticogging_config` are disabled.
 
-Two regimes, chosen by arm velocity `v` (ODrive `Vel_Estimate`, already polled; flip sign to the
-telemetry frame) and the requested torque `tau_cmd` (the function's `tau_setpoint`):
+Two regimes, chosen by arm velocity `v` (ODrive `Vel_Estimate` → telemetry frame rad/s) and the
+requested torque `tau_cmd` (`tau_setpoint`, before anticog):
 
 ```
-fs = percent_antifriction * friction_offset
+fs = pct * fs1                      // recomputed every call, so live changes take effect
 
-if |v| > V_TH:                      // MOVING (kinetic regime)
-    tau += fs * sign(v)             //   cancel Coulomb friction, which opposes motion
-else:                               // STATIC (stuck / nearly stopped)
-    if |tau_cmd| > TAU_TH:          //   controller really wants to move:
-        tau += fs * sign(tau_cmd)   //     breakaway help in the commanded direction
-    else:                           //   small or zero request:
-        (no comp)                   //     let it settle; no creep, no buzz at rest
+MOVING  (entered |v| > V_TH_HI, left |v| < V_TH_LO):
+    comp = copysignf(fs, v)         // cancel Coulomb friction, which opposes motion
+STATIC:
+    if |tau_cmd| > TAU_TH:  comp = copysignf(fs, tau_cmd)   // breakaway help
+    else:                   comp = 0                        // settle; no creep, no buzz
 ```
 
-- [ ] Implement the two regimes above
-- [ ] **Hysteresis on `V_TH`** (e.g. enter MOVING above `V_TH_HI`, leave below `V_TH_LO`). When
-      decelerating under an opposing command, `sign(v)` and `sign(tau_cmd)` disagree, so a single
-      threshold can make the comp flip ±2·fs right at the boundary. A small `static bool moving` is enough.
-- [ ] `V_TH`: just above the velocity noise floor at rest (look at `Vel_Estimate` while still)
-- [ ] `TAU_TH`: tradeoff. Lower gives better tracking of tiny commands (LQR near balance); higher
-      settles more readily, but below it there's no breakaway help, so expect a small t1 offset at rest
-- [ ] Value: `Arm1Config::fs1 = 0.0531` N-m. Start with `percent_antifriction` < 1 (e.g. 0.7)
-- [ ] Remember the KF/UKF is fed the **pre-compensation** tau (the model assumes friction is cancelled)
+- [x] Implement the two regimes above
+- [x] Hysteresis on `V_TH` (`V_TH_HI` / `V_TH_LO`, function-local `static FrictionState`)
+- [x] Velocity in the telemetry frame, rad/s (`-kTwoPi * Vel_Estimate`); signs verified through to `setTorque`
+- [x] Config struct + `load_friction_comp`, copied into a file-static; `fs` derived per call
+- [x] Placeholder values in `friction_comp.hpp`: `PCT = 0.7`, `V_TH_HI = 0.05`, `V_TH_LO = 0.02`,
+      `TAU_TH = 0.01` (tuned in 2.5b / Stage 5)
+- [x] KF/UKF is fed the **pre-compensation** tau (the model assumes friction is cancelled)
 
 ### 2.5b — Test friction comp at tau = 0
 
@@ -92,7 +91,9 @@ anticog + friction comp, log every tick.
       Compare against comp off (should stop much sooner, roughly linearly = Coulomb friction).
 - [ ] **No creep:** at rest, the arm doesn't drift or buzz on its own
 - [ ] **Not overcompensated:** the arm doesn't speed up after release or settle into a limit cycle
-- [ ] Tune `percent_antifriction` / `V_TH` until the flick decay matches ~4.4 s
+- [ ] Set `V_TH_HI` / `V_TH_LO` just above the velocity noise floor at rest (log `Vel_Estimate` while still)
+- [ ] Tune `PCT` until the flick decay matches ~4.4 s (with comp on, logged `Torque_Target` should have the
+      same sign as t1d while coasting)
 - [ ] Note: at `tau_cmd = 0` the STATIC branch never adds torque (below `TAU_TH`), so this tests
       the MOVING regime only, and "no creep" holds by design. Breakaway (`TAU_TH`) gets
       exercised in 2.5d / Stage 5

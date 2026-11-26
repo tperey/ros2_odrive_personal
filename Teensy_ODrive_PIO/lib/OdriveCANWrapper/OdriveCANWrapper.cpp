@@ -4,6 +4,8 @@
 #include "ODriveFlexCAN.hpp"
 struct ODriveStatus; // hack to prevent teensy compile error
 
+static constexpr float kTwoPi = 6.28318531f;   // [rad/turn] float, avoids double math
+
 /* COMMON STRUCTS */
 struct ODriveUserData {
   Heartbeat_msg_t last_heartbeat;
@@ -164,14 +166,23 @@ void load_anticogging_config(const float* cogging_map, float cogging_percentage,
     doAnticog = true;
     memcpy(anticog_map, cogging_map, ENCODER_COUNTS_PER_REV * sizeof(float));
     percent_anticog = cogging_percentage;
+    doFeedforward = true;
   }
 
-  if (friction) {
-    doAntifriction = true;
-    friction_offset = friction;
-    percent_antifriction = friction_percentage;
-  }
+  // Anticogging friction no longer supported
+  // if (friction) {
+  //   doAntifriction = true;
+  //   friction_offset = friction;
+  //   percent_antifriction = friction_percentage;
+  // }
+}
+
+static FrictionCompParams antifriction_config; 
+void load_friction_comp(const FrictionCompParams& p) {
+  antifriction_config = p;
+
   doFeedforward = true;
+  doAntifriction = true;
 }
 
 // GENERAL
@@ -965,6 +976,59 @@ bool perform_linear_position_sid(OdriveLinearPositionSID cur_lp_sid) {
 
 /* CONTROL */
 
+enum class FrictionState : uint8_t {
+  STATIC = 0,
+  MOVING,
+};
+
+float fric_comp(float tau_cmd, float vel_revs) {
+  // Returns ONLY the COMPENSATION
+
+  float fs = antifriction_config.fs * antifriction_config.pct;
+  float vel = -kTwoPi*vel_revs; // Assumes vel coming straight from telemetry (rev/s, in wrong direction)
+  static FrictionState state = FrictionState::STATIC;
+
+  // First, flip state based on velocity. With hysteresis
+  switch (state) {
+    case FrictionState::STATIC:
+      if (fabsf(vel) > antifriction_config.v_th_hi) {
+        state = FrictionState::MOVING;
+      }
+      break;
+
+    case FrictionState::MOVING:
+      if (fabsf(vel) < antifriction_config.v_th_lo) {
+        state = FrictionState::STATIC;
+      }
+      break;
+
+    default:
+      return 0.0f;  // No comp
+  }
+
+  // Now, do comp based on current state
+  switch (state) {
+    case FrictionState::STATIC:
+      // Check if nonzero cmd, then add friction kickstart
+      if (fabsf(tau_cmd) > antifriction_config.tau_th) {
+        return copysignf(fs, tau_cmd);
+      } else {
+        return 0.0f;  // Default no comp
+      }
+      break; // Should never hit, but safe
+
+    case FrictionState::MOVING:
+      // Add kickstart against friction
+      return copysignf(fs, vel);
+      break;
+
+    default:
+      return 0.0f; // No comp
+  }
+}
+
+
+
 float command_odrv0_torque(float tau_setpoint, bool poll) {
   // Set control mode on first call
   static bool is_first = true;
@@ -978,8 +1042,13 @@ float command_odrv0_torque(float tau_setpoint, bool poll) {
     poll_telemetry();
   }
 
-  // Check for feedforward
+  // Check for friction comp
   float tau_to_set = tau_setpoint;
+  if (doAntifriction) {
+    tau_to_set += fric_comp(tau_setpoint, odrv0_user_data.last_feedback.Vel_Estimate);
+  }
+
+  // Check for anticogging
   float cur_pos = -1*odrv0_user_data.last_feedback.Pos_Estimate;
   if (doAnticog) {
     // Get feedforward for encoder count (i.e. cogging map index)

@@ -76,6 +76,12 @@ void sendTelemetry_singleODCW(float cmd);
 bool check_for_shutdown_msg();
 
 void load_anticogging_config(const float* cogging_map, float cogging_percentage = 0.0, float friction = 0.0, float friction_percentage = 0.0);
+
+struct FrictionCompParams {
+    float fs, pct, v_th_hi, v_th_lo, tau_th;
+};
+void load_friction_comp(const FrictionCompParams& p);   // sets doAntifriction = true
+
 // poll = false when the caller already called poll_telemetry() this tick (state machine does)
 float command_odrv0_torque(float tau_setpoint, bool poll = true);
 
