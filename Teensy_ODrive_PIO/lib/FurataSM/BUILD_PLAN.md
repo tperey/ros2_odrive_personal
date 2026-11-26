@@ -39,6 +39,93 @@ File: `lib/OdriveCANWrapper/OdriveCANWrapper.cpp`
 
 ---
 
+## Stage 2.5 — Friction comp + UKF on hardware, outside the state machine
+
+Standalone test functions in `lib/OdriveCANWrapper/OdriveCANWrapper.cpp`, each run from its own
+main + `platformio.ini` env, like the SID mains (`perform_*` pattern: own 1 kHz loop, `check_for_shutdown_msg()`).
+Log with `logger_teensy_node.py --full` via `sendTelemetry_furata` (`state = 0`, `sm_fault = 0`).
+
+**Why here:** the state machine assumes friction is compensated and the UKF works. Check both
+without any state machine logic in the way.
+
+> **Recommended before 2.5c:** add raw `t1_meas` / `t2_meas` back into the packet (+8 bytes, update
+> `FURATA_TEL_PKCT_SIZE` and the logger). Tuning Q/R without the measurements is guesswork, and
+> logging `(tau, t1, t2)` lets you replay the UKF offline in Python instead of reflashing.
+
+### 2.5a — Implement friction comp in `command_odrv0_torque`
+
+`doAntifriction`, `friction_offset`, `percent_antifriction` are already set by
+`load_anticogging_config`, but **never applied**. Add the friction term next to the anticog term.
+
+Two regimes, chosen by arm velocity `v` (ODrive `Vel_Estimate`, already polled; flip sign to the
+telemetry frame) and the requested torque `tau_cmd` (the function's `tau_setpoint`):
+
+```
+fs = percent_antifriction * friction_offset
+
+if |v| > V_TH:                      // MOVING (kinetic regime)
+    tau += fs * sign(v)             //   cancel Coulomb friction, which opposes motion
+else:                               // STATIC (stuck / nearly stopped)
+    if |tau_cmd| > TAU_TH:          //   controller really wants to move:
+        tau += fs * sign(tau_cmd)   //     breakaway help in the commanded direction
+    else:                           //   small or zero request:
+        (no comp)                   //     let it settle; no creep, no buzz at rest
+```
+
+- [ ] Implement the two regimes above
+- [ ] **Hysteresis on `V_TH`** (e.g. enter MOVING above `V_TH_HI`, leave below `V_TH_LO`). When
+      decelerating under an opposing command, `sign(v)` and `sign(tau_cmd)` disagree, so a single
+      threshold can make the comp flip ±2·fs right at the boundary. A small `static bool moving` is enough.
+- [ ] `V_TH`: just above the velocity noise floor at rest (look at `Vel_Estimate` while still)
+- [ ] `TAU_TH`: tradeoff. Lower gives better tracking of tiny commands (LQR near balance); higher
+      settles more readily, but below it there's no breakaway help, so expect a small t1 offset at rest
+- [ ] Value: `Arm1Config::fs1 = 0.0531` N-m. Start with `percent_antifriction` < 1 (e.g. 0.7)
+- [ ] Remember the KF/UKF is fed the **pre-compensation** tau (the model assumes friction is cancelled)
+
+### 2.5b — Test friction comp at tau = 0
+
+New function, e.g. `perform_zero_torque_test()`: closed loop, `command_odrv0_torque(0.0f)` with
+anticog + friction comp, log every tick.
+
+- [ ] **Flick test:** spin the arm by hand and let go. With good comp the velocity decays
+      exponentially from viscous damping only: time constant ≈ `J1zz_hat / b1` = 0.0022 / 0.0005 ≈ **4.4 s**.
+      Compare against comp off (should stop much sooner, roughly linearly = Coulomb friction).
+- [ ] **No creep:** at rest, the arm doesn't drift or buzz on its own
+- [ ] **Not overcompensated:** the arm doesn't speed up after release or settle into a limit cycle
+- [ ] Tune `percent_antifriction` / `V_TH` until the flick decay matches ~4.4 s
+- [ ] Note: at `tau_cmd = 0` the STATIC branch never adds torque (below `TAU_TH`), so this tests
+      the MOVING regime only, and "no creep" holds by design. Breakaway (`TAU_TH`) gets
+      exercised in 2.5d / Stage 5
+
+### 2.5c — Add the UKF, tau = 0
+
+Same loop as 2.5b plus the UKF: read the encoder, `ukf.step(tau_prev, t1, t2)`, send `x_hat`.
+(Function takes `FurataKFBase*` + `Encoder*`, like `perform_sid_with_pend_*` took `AccelKF*`.
+Alternative: put this loop in the test main instead, so the wrapper stays KF-free. Both work.)
+
+- [ ] Signs and units: `ENC_SIGN`, t1 in rad, dt2 wraps cleanly near ±pi
+- [ ] **Hands-off free swing:** raise pendulum ~90°, release, don't touch. Velocities should
+      match the differentiated measurement with little lag (this is the real filter check)
+- [ ] Moving things by hand: positions track; velocities lag while you push (expected, unmodeled torque)
+- [ ] Loop time: UKF + CAN polls + telemetry fit in 1 ms (time it with `micros()`)
+- [ ] Tune `Q`, `R`
+
+### 2.5d — UKF with a sinusoidal torque input
+
+Same as 2.5c with `tau = A sin(2 pi f t)` (reuse `OdriveSinusoidTorqueSID`), still feeding the
+pre-compensation tau to the UKF.
+
+- [ ] Small amplitude first (below your step-SID 0.08 N-m), add a timeout or cycle limit
+- [ ] A few frequencies, including near the pendulum's natural frequency
+      (`sqrt(m2 g l2 / J2zz_hat)` ≈ 9.4 rad/s ≈ **1.5 Hz**). At resonance the swing grows every
+      cycle and nothing in a standalone test stops it, so use a cycle limit. Going over the top is
+      fine for the UKF (dt2 wraps at hanging, which normal swings already cross); and the rig has slip
+      rings, so a deliberate over-the-top run is a good full-range test of the nonlinear model.
+- [ ] Estimates stay smooth and track the measurement; no growing bias in t1d / t2d
+- [ ] Arm stays within a safe range (keep the amplitude low or add a t1 limit that stops the motor)
+
+---
+
 ## Stage 3 — Read-only state machine, motor never armed
 
 File: `lib/FurataSM/FurataStateMachine.cpp`
@@ -53,7 +140,8 @@ File: `lib/FurataSM/FurataStateMachine.cpp`
 - [ ] **Temporary:** call `stop_motor_single()` at the end of `begin()` so the axis isn't left in
       closed loop (`_entry` is still a stub). Remove in Stage 4.
 
-**Test — the big one. First time the UKF runs on hardware.** Move the arm and pendulum by hand,
+**Test:** UKF and friction comp were already checked in Stage 2.5, so this checks that the SM
+reproduces those results through `begin()` / `tick()`. Should look like 2.5c. Move the arm and pendulum by hand,
 plot `x_hat` (run the logger with `--full`). Raw `t1_meas` / `t2_meas` were dropped from the
 packet. Consider adding them back temporarily: without them you can't see filter lag or noise
 against the measurement.
